@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
 import {
   ClipboardCheck,
@@ -16,20 +18,24 @@ import { cn } from "@/lib/utils";
 const navigation = [
   {
     label: "Workspace",
+    href: "/",
     icon: LayoutDashboard,
     roles: ["admin", "editor", "viewer"],
   },
   {
     label: "Quality Review",
+    href: "/",
     icon: ClipboardCheck,
     roles: ["admin", "editor", "viewer"],
   },
   {
     label: "Administration",
+    href: "/admin/users",
     icon: Settings,
     roles: ["admin"],
   },
 ] satisfies Array<{
+  href: string;
   label: string;
   icon: ComponentType<{ size?: number }>;
   roles: AuthRole[];
@@ -40,6 +46,7 @@ type SidebarProps = {
 };
 
 export function Sidebar({ role }: SidebarProps) {
+  const pathname = usePathname();
   const { isOpen, toggle } = useSidebarStore();
   const visibleNavigation = navigation.filter((item) =>
     item.roles.includes(role),
@@ -81,14 +88,17 @@ export function Sidebar({ role }: SidebarProps) {
         </div>
         <nav className="mt-10 space-y-1">
           {visibleNavigation.map((item) => (
-            <button
-              className="flex h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-medium text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+            <Link
+              className={cn(
+                "flex h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-medium text-muted-foreground transition hover:bg-secondary hover:text-foreground",
+                pathname === item.href && "bg-secondary text-foreground",
+              )}
+              href={item.href}
               key={item.label}
-              type="button"
             >
               <item.icon size={18} />
               {item.label}
-            </button>
+            </Link>
           ))}
         </nav>
       </aside>
