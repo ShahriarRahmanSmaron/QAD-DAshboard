@@ -24,7 +24,7 @@ const navigation = [
   },
   {
     label: "Quality Review",
-    href: "/",
+    href: "/reports/schema-test",
     icon: ClipboardCheck,
     roles: ["admin", "editor", "viewer"],
   },

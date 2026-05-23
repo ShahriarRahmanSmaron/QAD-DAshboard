@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "FastAPI foundation for DBL QAD Portal."
 requires-python = ">=3.12"
 dependencies = [
+  "alembic>=1.15.0",
   "asyncpg>=0.30.0",
   "fastapi[standard]>=0.115.12",
   "greenlet>=3.2.2",
@@ -23,6 +24,9 @@ dev = [
   "pytest-asyncio>=0.26.0",
   "ruff>=0.11.10"
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.ruff]
 line-length = 100
