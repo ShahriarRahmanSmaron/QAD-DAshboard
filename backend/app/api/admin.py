@@ -26,7 +26,7 @@ from app.admin.service import (
     upsert_admin_user,
 )
 from app.auth.constants import UserRole
-from app.auth.dependencies import CurrentUserDep
+from app.auth.dependencies import require_role
 from app.auth.schemas import AuthUser
 from app.core.supabase import get_required_supabase_admin_client
 from app.db.session import get_db_session
@@ -34,19 +34,7 @@ from app.db.session import get_db_session
 router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 AdminSupabaseDep = Annotated[AsyncClient, Depends(get_required_supabase_admin_client)]
-
-
-async def require_admin(user: CurrentUserDep) -> AuthUser:
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access is required.",
-        )
-
-    return user
-
-
-AdminUserDep = Annotated[AuthUser, Depends(require_admin)]
+AdminUserDep = Annotated[AuthUser, Depends(require_role([UserRole.ADMIN]))]
 
 
 async def find_supabase_user_by_email(

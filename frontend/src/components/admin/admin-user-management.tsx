@@ -591,6 +591,7 @@ export function AdminUserManagement() {
             rowData={users}
             rowHeight={54}
             suppressCellFocus
+            theme="legacy"
           />
         </div>
 

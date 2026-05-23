@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Annotated
 from uuid import UUID
 
@@ -69,6 +69,21 @@ async def get_current_user(
 
 
 CurrentUserDep = Annotated[AuthUser, Depends(get_current_user)]
+
+
+def require_role(roles: Iterable[UserRole]) -> Callable[..., object]:
+    allowed_roles = set(roles)
+
+    async def dependency(user: CurrentUserDep) -> AuthUser:
+        if user.role in allowed_roles:
+            return user
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this resource.",
+        )
+
+    return dependency
 
 
 def require_permission(
