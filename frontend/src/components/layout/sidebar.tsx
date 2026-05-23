@@ -1,28 +1,49 @@
 "use client";
 
+import type { ComponentType } from "react";
 import {
+  ClipboardCheck,
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
-  ShieldCheck,
+  Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSidebarStore } from "@/hooks/use-sidebar-store";
+import type { AuthRole } from "@/lib/auth/types";
 import { cn } from "@/lib/utils";
 
 const navigation = [
   {
     label: "Workspace",
     icon: LayoutDashboard,
+    roles: ["admin", "editor", "viewer"],
   },
   {
-    label: "Quality",
-    icon: ShieldCheck,
+    label: "Quality Review",
+    icon: ClipboardCheck,
+    roles: ["admin", "editor", "viewer"],
   },
-];
+  {
+    label: "Administration",
+    icon: Settings,
+    roles: ["admin"],
+  },
+] satisfies Array<{
+  label: string;
+  icon: ComponentType<{ size?: number }>;
+  roles: AuthRole[];
+}>;
 
-export function Sidebar() {
+type SidebarProps = {
+  role: AuthRole;
+};
+
+export function Sidebar({ role }: SidebarProps) {
   const { isOpen, toggle } = useSidebarStore();
+  const visibleNavigation = navigation.filter((item) =>
+    item.roles.includes(role),
+  );
 
   return (
     <>
@@ -59,7 +80,7 @@ export function Sidebar() {
           </Button>
         </div>
         <nav className="mt-10 space-y-1">
-          {navigation.map((item) => (
+          {visibleNavigation.map((item) => (
             <button
               className="flex h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-medium text-muted-foreground transition hover:bg-secondary hover:text-foreground"
               key={item.label}

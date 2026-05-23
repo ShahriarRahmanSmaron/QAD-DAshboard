@@ -3,13 +3,18 @@
 import { motion } from "framer-motion";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import type { AuthUser } from "@/lib/auth/types";
 
-export function AppShell() {
+type AppShellProps = {
+  user: AuthUser;
+};
+
+export function AppShell({ user }: AppShellProps) {
   return (
     <div className="min-h-screen">
-      <Sidebar />
+      <Sidebar role={user.role} />
       <div className="lg:pl-72">
-        <Topbar />
+        <Topbar user={user} />
         <motion.main
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -26,8 +31,8 @@ export function AppShell() {
               </h1>
               <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
                 A clean foundation for textile QAD operations, ready for feature
-                modules, analytics, authentication, uploads, realtime workflows,
-                and auditability.
+                modules, analytics, uploads, realtime workflows, and
+                auditability.
               </p>
             </div>
             <div className="mt-16 grid gap-3 sm:grid-cols-3">
