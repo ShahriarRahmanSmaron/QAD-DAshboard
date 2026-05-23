@@ -174,3 +174,112 @@ async def list_active_report_types(session: AsyncSession) -> list[ReportType]:
         .order_by(ReportType.name, ReportType.version)
     )
     return list(result.scalars().all())
+
+
+async def validate_references_exist(
+    session: AsyncSession,
+    *,
+    report_type_id: UUID,
+    buyer_id: UUID,
+    unit_id: UUID,
+) -> dict[str, bool]:
+    """Check buyer, unit, and report_type existence in a single round-trip."""
+    from sqlalchemy import literal_column, union_all
+
+    q_buyer = (
+        select(literal_column("'buyer'").label("ref"))
+        .select_from(Buyer)
+        .where(Buyer.id == buyer_id, Buyer.deleted_at.is_(None), Buyer.is_active.is_(True))
+    )
+    q_unit = (
+        select(literal_column("'unit'").label("ref"))
+        .select_from(Unit)
+        .where(Unit.id == unit_id, Unit.deleted_at.is_(None), Unit.is_active.is_(True))
+    )
+    q_rt = (
+        select(literal_column("'report_type'").label("ref"))
+        .select_from(ReportType)
+        .where(
+            ReportType.id == report_type_id,
+            ReportType.deleted_at.is_(None),
+            ReportType.is_active.is_(True),
+        )
+    )
+    combined = union_all(q_buyer, q_unit, q_rt)
+    result = await session.execute(combined)
+    found = {row[0] for row in result.all()}
+    return {
+        "buyer": "buyer" in found,
+        "unit": "unit" in found,
+        "report_type": "report_type" in found,
+    }
+
+
+async def list_report_summaries(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+    page: int,
+    page_size: int,
+) -> tuple[list[dict], int]:
+    """Return lightweight report summaries with row/metric counts (no eager loads)."""
+
+    filters = (Report.deleted_at.is_(None), _report_access_filter(user))
+
+    # Total count
+    total_result = await session.execute(select(func.count()).select_from(Report).where(*filters))
+    total = total_result.scalar_one()
+
+    # Row count subquery
+    row_count_sq = (
+        select(func.count())
+        .select_from(ReportRow)
+        .where(ReportRow.report_id == Report.id, ReportRow.deleted_at.is_(None))
+        .correlate(Report)
+        .scalar_subquery()
+        .label("row_count")
+    )
+
+    # Metric count subquery
+    metric_count_sq = (
+        select(func.count())
+        .select_from(ReportMetric)
+        .where(ReportMetric.report_id == Report.id, ReportMetric.deleted_at.is_(None))
+        .correlate(Report)
+        .scalar_subquery()
+        .label("metric_count")
+    )
+
+    stmt = (
+        select(
+            Report.id,
+            Report.report_type_id,
+            ReportType.name.label("report_type_name"),
+            Report.buyer_id,
+            Buyer.name.label("buyer_name"),
+            Report.unit_id,
+            Unit.name.label("unit_name"),
+            Report.owner_user_id,
+            Report.report_date,
+            Report.period_start,
+            Report.period_end,
+            Report.status,
+            Report.title,
+            Report.remarks,
+            Report.created_at,
+            Report.updated_at,
+            row_count_sq,
+            metric_count_sq,
+        )
+        .join(Buyer, Buyer.id == Report.buyer_id, isouter=True)
+        .join(Unit, Unit.id == Report.unit_id, isouter=True)
+        .join(ReportType, ReportType.id == Report.report_type_id, isouter=True)
+        .where(*filters)
+        .order_by(Report.report_date.desc(), Report.created_at.desc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    )
+
+    result = await session.execute(stmt)
+    rows = [dict(row._mapping) for row in result.all()]
+    return rows, int(total)

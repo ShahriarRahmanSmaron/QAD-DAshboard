@@ -1,4 +1,5 @@
 import type {
+  BulkReportSavePayload,
   BuyerListResponse,
   Report,
   ReportCreatePayload,
@@ -7,6 +8,7 @@ import type {
   ReportMetricCreatePayload,
   ReportRow,
   ReportRowCreatePayload,
+  ReportSummaryListResponse,
   ReportTypeListResponse,
   UnitListResponse,
 } from "@/lib/reports/types";
@@ -75,6 +77,21 @@ export function createReportMetric(reportId: string, payload: ReportMetricCreate
     method: "POST",
     body: payload,
   });
+}
+
+export function bulkSaveReport(payload: BulkReportSavePayload) {
+  return request<Report>("/api/reports/save", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function listReportSummaries(page = 1, pageSize = 20) {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  return request<ReportSummaryListResponse>(`/api/reports/summaries?${params}`);
 }
 
 export function listBuyers() {

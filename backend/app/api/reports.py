@@ -10,6 +10,7 @@ from app.auth.schemas import AuthUser
 from app.db.session import get_db_session
 from app.reporting import repository
 from app.reporting.schemas import (
+    BulkReportSaveRequest,
     ReportCreateRequest,
     ReportListResponse,
     ReportMetricCreateRequest,
@@ -17,13 +18,16 @@ from app.reporting.schemas import (
     ReportResponse,
     ReportRowCreateRequest,
     ReportRowResponse,
+    ReportSummaryListResponse,
 )
 from app.reporting.service import (
+    bulk_save_report,
     create_report,
     create_report_metric,
     create_report_row,
     serialize_metric,
     serialize_report,
+    serialize_report_summary,
     serialize_row,
 )
 
@@ -54,6 +58,28 @@ async def list_reports(
     )
 
 
+@router.get("/summaries", response_model=ReportSummaryListResponse)
+async def list_report_summaries(
+    session: SessionDep,
+    user: ReportReaderDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> ReportSummaryListResponse:
+    """Lightweight report list optimized for grid/table views."""
+    rows, total = await repository.list_report_summaries(
+        session,
+        user=user,
+        page=page,
+        page_size=page_size,
+    )
+    return ReportSummaryListResponse(
+        reports=[serialize_report_summary(row) for row in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
 @router.post("", response_model=ReportResponse, status_code=status.HTTP_201_CREATED)
 async def post_report(
     payload: ReportCreateRequest,
@@ -67,6 +93,27 @@ async def post_report(
         await session.rollback()
         raise
 
+    loaded = await repository.get_accessible_report(session, report_id=report.id, user=user)
+    if loaded is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+    return serialize_report(loaded)
+
+
+@router.post("/save", response_model=ReportResponse, status_code=status.HTTP_201_CREATED)
+async def bulk_save(
+    payload: BulkReportSaveRequest,
+    session: SessionDep,
+    user: ReportWriterDep,
+) -> ReportResponse:
+    """Create a full report tree (header + rows + metrics) in a single transaction."""
+    try:
+        report = await bulk_save_report(session, payload=payload, actor=user)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+    # Reload with relationships for the response
     loaded = await repository.get_accessible_report(session, report_id=report.id, user=user)
     if loaded is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")

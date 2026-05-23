@@ -15,6 +15,8 @@ from app.db.session import get_db_session
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 SupabaseDep = Annotated[AsyncClient, Depends(get_required_supabase_client)]
 
+_AUTH_USER_STATE_KEY = "_resolved_auth_user"
+
 
 def _get_bearer_token(authorization: str | None) -> str | None:
     if not authorization:
@@ -33,6 +35,11 @@ async def get_current_user(
     supabase: SupabaseDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AuthUser:
+    # Request-level memoization: avoid repeated Supabase + DB calls within the same request.
+    cached: AuthUser | None = getattr(request.state, _AUTH_USER_STATE_KEY, None)
+    if cached is not None:
+        return cached
+
     token = _get_bearer_token(authorization) or request.cookies.get(ACCESS_TOKEN_COOKIE)
     if token is None:
         raise HTTPException(
@@ -65,6 +72,8 @@ async def get_current_user(
             detail="User profile is not provisioned.",
         )
 
+    # Cache on request.state for the lifetime of this request
+    request.state._resolved_auth_user = profile  # noqa: SLF001
     return profile
 
 

@@ -6,9 +6,7 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
-  createReport,
-  createReportMetric,
-  createReportRow,
+  bulkSaveReport,
   getReport,
   listBuyers,
   listReportTypes,
@@ -16,8 +14,8 @@ import {
   listUnits,
 } from "@/lib/reports/api";
 import type {
+  BulkRowMetricPayload,
   Report,
-  ReportMetricCreatePayload,
   ReportValueType,
 } from "@/lib/reports/types";
 
@@ -77,14 +75,13 @@ function newRowDraft(): RowDraft {
   };
 }
 
-function buildMetricPayload(rowId: string, metric: MetricDraft): ReportMetricCreatePayload {
-  const base = {
-    row_id: rowId,
+function buildBulkMetricPayload(metric: MetricDraft, sortOrder: number): BulkRowMetricPayload {
+  const base: BulkRowMetricPayload = {
     metric_key: metric.metricKey.trim(),
     metric_label: metric.metricLabel.trim() || null,
     value_type: metric.valueType,
     unit_of_measure: metric.unitOfMeasure.trim() || null,
-    sort_order: 0,
+    sort_order: sortOrder,
     metadata: {},
   };
 
@@ -221,7 +218,7 @@ export function ReportSchemaTester() {
     setIsSaving(true);
 
     try {
-      const report = await createReport({
+      const report = await bulkSaveReport({
         report_type_id: form.reportTypeId.trim(),
         buyer_id: form.buyerId.trim(),
         unit_id: form.unitId.trim(),
@@ -229,32 +226,22 @@ export function ReportSchemaTester() {
         title: form.title.trim() || null,
         remarks: form.remarks.trim() || null,
         metadata: { source: "schema-test" },
-      });
-
-      for (const [rowIndex, row] of rows.entries()) {
-        const savedRow = await createReportRow(report.id, {
+        rows: rows.map((row, rowIndex) => ({
           row_key: row.rowKey.trim() || null,
           row_label: row.rowLabel.trim() || null,
           row_group: row.rowGroup.trim() || null,
           sort_order: rowIndex,
           metadata: { source: "schema-test" },
-        });
+          metrics: row.metrics
+            .filter((metric) => metric.metricKey.trim())
+            .map((metric, metricIndex) => buildBulkMetricPayload(metric, metricIndex)),
+        })),
+        metrics: [],
+      });
 
-        for (const [metricIndex, metric] of row.metrics.entries()) {
-          if (!metric.metricKey.trim()) {
-            continue;
-          }
-          await createReportMetric(report.id, {
-            ...buildMetricPayload(savedRow.id, metric),
-            sort_order: metricIndex,
-          });
-        }
-      }
-
-      const loaded = await getReport(report.id);
-      setSelectedReport(loaded);
-      setSelectedReportId(loaded.id);
-      setMessage(`Saved report ${loaded.id}.`);
+      setSelectedReport(report);
+      setSelectedReportId(report.id);
+      setMessage(`Saved report ${report.id}.`);
       await handleFetchReports();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Unable to save report.");

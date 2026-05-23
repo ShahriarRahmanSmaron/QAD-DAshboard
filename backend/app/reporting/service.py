@@ -16,12 +16,14 @@ from app.reporting.models import (
     ReportValueType,
 )
 from app.reporting.schemas import (
+    BulkReportSaveRequest,
     ReportCreateRequest,
     ReportMetricCreateRequest,
     ReportMetricResponse,
     ReportResponse,
     ReportRowCreateRequest,
     ReportRowResponse,
+    ReportSummary,
 )
 
 
@@ -292,3 +294,189 @@ async def create_report_metric(
     )
     await session.flush()
     return metric
+
+
+def serialize_report_summary(row: dict) -> ReportSummary:
+    """Convert a flat row dict from list_report_summaries into a ReportSummary."""
+    return ReportSummary(
+        id=row["id"],
+        report_type_id=row["report_type_id"],
+        report_type_name=row.get("report_type_name"),
+        buyer_id=row["buyer_id"],
+        buyer_name=row.get("buyer_name"),
+        unit_id=row["unit_id"],
+        unit_name=row.get("unit_name"),
+        owner_user_id=row.get("owner_user_id"),
+        report_date=row["report_date"],
+        period_start=row.get("period_start"),
+        period_end=row.get("period_end"),
+        status=ReportStatus(row["status"]),
+        title=row.get("title"),
+        remarks=row.get("remarks"),
+        row_count=row.get("row_count", 0),
+        metric_count=row.get("metric_count", 0),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+async def bulk_save_report(
+    session: AsyncSession,
+    *,
+    payload: BulkReportSaveRequest,
+    actor: AuthUser,
+) -> Report:
+    """Create a full report tree (header + rows + metrics) in a single transaction.
+
+    Validates references in one query, bulk-inserts all rows and metrics,
+    and emits a single audit log entry.
+    """
+    # Validate all FK references in one round-trip
+    refs = await repository.validate_references_exist(
+        session,
+        report_type_id=payload.report_type_id,
+        buyer_id=payload.buyer_id,
+        unit_id=payload.unit_id,
+    )
+    if not refs["report_type"]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid report type.",
+        )
+    if not refs["buyer"]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid buyer.",
+        )
+    if not refs["unit"]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid unit.",
+        )
+
+    # Create report
+    report = Report(
+        report_type_id=payload.report_type_id,
+        buyer_id=payload.buyer_id,
+        unit_id=payload.unit_id,
+        owner_user_id=actor.id,
+        report_date=payload.report_date,
+        period_start=payload.period_start,
+        period_end=payload.period_end,
+        status=ReportStatus.DRAFT.value,
+        title=payload.title,
+        remarks=payload.remarks,
+        metadata_=_metadata(payload.metadata),
+        created_by_user_id=actor.id,
+        updated_by_user_id=actor.id,
+    )
+    session.add(report)
+
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An active report already exists for this type, buyer, unit, and date.",
+        ) from exc
+
+    # Bulk-insert rows and their nested metrics
+    all_rows: list[ReportRow] = []
+    all_metrics: list[ReportMetric] = []
+
+    for row_payload in payload.rows:
+        row = ReportRow(
+            report_id=report.id,
+            owner_user_id=actor.id,
+            row_key=row_payload.row_key.strip() if row_payload.row_key else None,
+            row_label=row_payload.row_label,
+            row_group=row_payload.row_group,
+            sort_order=row_payload.sort_order,
+            source_sheet_name=row_payload.source_sheet_name,
+            source_row_number=row_payload.source_row_number,
+            metadata_=_metadata(row_payload.metadata),
+            created_by_user_id=actor.id,
+            updated_by_user_id=actor.id,
+        )
+        all_rows.append(row)
+
+    if all_rows:
+        session.add_all(all_rows)
+        try:
+            await session.flush()  # assigns IDs to rows
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate row key within this report.",
+            ) from exc
+
+    # Now create metrics attached to their rows
+    for row, row_payload in zip(all_rows, payload.rows):
+        for metric_payload in row_payload.metrics:
+            metric = ReportMetric(
+                report_id=report.id,
+                row_id=row.id,
+                metric_key=metric_payload.metric_key.strip(),
+                metric_label=metric_payload.metric_label,
+                value_type=metric_payload.value_type.value,
+                value_numeric=metric_payload.value_numeric,
+                value_text=metric_payload.value_text,
+                value_date=metric_payload.value_date,
+                value_boolean=metric_payload.value_boolean,
+                unit_of_measure=metric_payload.unit_of_measure,
+                source_sheet_name=metric_payload.source_sheet_name,
+                source_cell_address=metric_payload.source_cell_address,
+                sort_order=metric_payload.sort_order,
+                metadata_=_metadata(metric_payload.metadata),
+                created_by_user_id=actor.id,
+                updated_by_user_id=actor.id,
+            )
+            all_metrics.append(metric)
+
+    # Report-level metrics (not attached to a row)
+    for report_metric_payload in payload.metrics:
+        metric = ReportMetric(
+            report_id=report.id,
+            row_id=None,
+            metric_key=report_metric_payload.metric_key.strip(),
+            metric_label=report_metric_payload.metric_label,
+            value_type=report_metric_payload.value_type.value,
+            value_numeric=report_metric_payload.value_numeric,
+            value_text=report_metric_payload.value_text,
+            value_date=report_metric_payload.value_date,
+            value_boolean=report_metric_payload.value_boolean,
+            unit_of_measure=report_metric_payload.unit_of_measure,
+            source_sheet_name=report_metric_payload.source_sheet_name,
+            source_cell_address=report_metric_payload.source_cell_address,
+            sort_order=report_metric_payload.sort_order,
+            metadata_=_metadata(report_metric_payload.metadata),
+            created_by_user_id=actor.id,
+            updated_by_user_id=actor.id,
+        )
+        all_metrics.append(metric)
+
+    if all_metrics:
+        session.add_all(all_metrics)
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate row key or metric key within this report.",
+            ) from exc
+
+    # Single audit log entry for the entire save
+    add_audit_log(
+        session,
+        actor=actor,
+        action="report.bulk_saved",
+        target_type="report",
+        target_id=report.id,
+        metadata={
+            "report_date": payload.report_date.isoformat(),
+            "row_count": len(all_rows),
+            "metric_count": len(all_metrics),
+        },
+    )
+    await session.flush()
+    return report

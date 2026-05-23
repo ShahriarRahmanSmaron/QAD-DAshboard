@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     supabase_anon_key: str | None = None
     supabase_service_role_key: str | None = None
     cors_origins_raw: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
+    slow_request_threshold_ms: float = 500.0
+    slow_query_threshold_ms: float = 250.0
 
     @property
     def cors_origins(self) -> list[str]:
