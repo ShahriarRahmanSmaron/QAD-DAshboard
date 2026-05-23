@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.reporting.models import ReportStatus, ReportValueType
 
@@ -133,3 +133,44 @@ class ReportListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class BuyerOption(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    code: str
+    name: str
+    is_active: bool
+
+
+class UnitOption(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    code: str
+    name: str
+    is_active: bool
+
+
+class ReportTypeOption(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    code: str
+    name: str
+    description: str | None
+    version: int
+    is_active: bool
+
+
+class BuyerListResponse(BaseModel):
+    buyers: list[BuyerOption]
+
+
+class UnitListResponse(BaseModel):
+    units: list[UnitOption]
+
+
+class ReportTypeListResponse(BaseModel):
+    report_types: list[ReportTypeOption]

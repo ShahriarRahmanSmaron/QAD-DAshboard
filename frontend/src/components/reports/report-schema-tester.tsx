@@ -1,14 +1,19 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   createReport,
   createReportMetric,
   createReportRow,
   getReport,
+  listBuyers,
+  listReportTypes,
   listReports,
+  listUnits,
 } from "@/lib/reports/api";
 import type {
   Report,
@@ -105,6 +110,56 @@ export function ReportSchemaTester() {
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const reportTypesQuery = useQuery({
+    queryKey: ["lookups", "report-types"],
+    queryFn: listReportTypes,
+    staleTime: 60_000,
+  });
+  const buyersQuery = useQuery({
+    queryKey: ["lookups", "buyers"],
+    queryFn: listBuyers,
+    staleTime: 60_000,
+  });
+  const unitsQuery = useQuery({
+    queryKey: ["lookups", "units"],
+    queryFn: listUnits,
+    staleTime: 60_000,
+  });
+
+  const reportTypeOptions = useMemo(
+    () =>
+      (reportTypesQuery.data?.report_types ?? []).map((reportType) => ({
+        value: reportType.id,
+        label: reportType.name,
+        hint: reportType.code,
+      })),
+    [reportTypesQuery.data],
+  );
+  const buyerOptions = useMemo(
+    () =>
+      (buyersQuery.data?.buyers ?? []).map((buyer) => ({
+        value: buyer.id,
+        label: buyer.name,
+        hint: buyer.code,
+      })),
+    [buyersQuery.data],
+  );
+  const unitOptions = useMemo(
+    () =>
+      (unitsQuery.data?.units ?? []).map((unit) => ({
+        value: unit.id,
+        label: unit.name,
+        hint: unit.code,
+      })),
+    [unitsQuery.data],
+  );
+
+  const lookupsErrorMessage =
+    (reportTypesQuery.error as Error | null)?.message ??
+    (buyersQuery.error as Error | null)?.message ??
+    (unitsQuery.error as Error | null)?.message ??
+    null;
 
   const rowCount = rows.length;
   const metricCount = useMemo(
@@ -257,30 +312,68 @@ export function ReportSchemaTester() {
         </div>
 
         <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <label className="space-y-1 text-sm">
-            <span className="font-medium">Report type UUID</span>
-            <input
-              className="h-10 w-full rounded-md border bg-background px-3"
+          <div className="space-y-1 text-sm">
+            <label htmlFor="report-type-select" className="font-medium">
+              Report type
+            </label>
+            <SearchableSelect
+              id="report-type-select"
               value={form.reportTypeId}
-              onChange={(event) => updateForm("reportTypeId", event.target.value)}
+              options={reportTypeOptions}
+              onChange={(value) => updateForm("reportTypeId", value)}
+              placeholder={
+                reportTypesQuery.isLoading ? "Loading report types..." : "Select a report type"
+              }
+              searchPlaceholder="Search report types"
+              isLoading={reportTypesQuery.isLoading}
+              emptyMessage={
+                reportTypesQuery.isError
+                  ? "Unable to load report types."
+                  : "No active report types. Run the seed script."
+              }
+              disabled={reportTypesQuery.isLoading}
             />
-          </label>
-          <label className="space-y-1 text-sm">
-            <span className="font-medium">Buyer UUID</span>
-            <input
-              className="h-10 w-full rounded-md border bg-background px-3"
+          </div>
+          <div className="space-y-1 text-sm">
+            <label htmlFor="buyer-select" className="font-medium">
+              Buyer
+            </label>
+            <SearchableSelect
+              id="buyer-select"
               value={form.buyerId}
-              onChange={(event) => updateForm("buyerId", event.target.value)}
+              options={buyerOptions}
+              onChange={(value) => updateForm("buyerId", value)}
+              placeholder={buyersQuery.isLoading ? "Loading buyers..." : "Select a buyer"}
+              searchPlaceholder="Search buyers"
+              isLoading={buyersQuery.isLoading}
+              emptyMessage={
+                buyersQuery.isError
+                  ? "Unable to load buyers."
+                  : "No active buyers. Run the seed script."
+              }
+              disabled={buyersQuery.isLoading}
             />
-          </label>
-          <label className="space-y-1 text-sm">
-            <span className="font-medium">Unit UUID</span>
-            <input
-              className="h-10 w-full rounded-md border bg-background px-3"
+          </div>
+          <div className="space-y-1 text-sm">
+            <label htmlFor="unit-select" className="font-medium">
+              Unit
+            </label>
+            <SearchableSelect
+              id="unit-select"
               value={form.unitId}
-              onChange={(event) => updateForm("unitId", event.target.value)}
+              options={unitOptions}
+              onChange={(value) => updateForm("unitId", value)}
+              placeholder={unitsQuery.isLoading ? "Loading units..." : "Select a unit"}
+              searchPlaceholder="Search units"
+              isLoading={unitsQuery.isLoading}
+              emptyMessage={
+                unitsQuery.isError
+                  ? "Unable to load units."
+                  : "No active units. Run the seed script."
+              }
+              disabled={unitsQuery.isLoading}
             />
-          </label>
+          </div>
           <label className="space-y-1 text-sm">
             <span className="font-medium">Report date</span>
             <input
@@ -290,6 +383,9 @@ export function ReportSchemaTester() {
               onChange={(event) => updateForm("reportDate", event.target.value)}
             />
           </label>
+          {lookupsErrorMessage ? (
+            <p className="md:col-span-2 text-sm text-destructive">{lookupsErrorMessage}</p>
+          ) : null}
           <label className="space-y-1 text-sm md:col-span-2">
             <span className="font-medium">Title</span>
             <input

@@ -103,3 +103,39 @@ export type ReportMetricCreatePayload = {
   sort_order: number;
   metadata?: Record<string, unknown>;
 };
+
+
+export type BuyerOption = {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+};
+
+export type UnitOption = {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+};
+
+export type ReportTypeOption = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  version: number;
+  is_active: boolean;
+};
+
+export type BuyerListResponse = {
+  buyers: BuyerOption[];
+};
+
+export type UnitListResponse = {
+  units: UnitOption[];
+};
+
+export type ReportTypeListResponse = {
+  report_types: ReportTypeOption[];
+};

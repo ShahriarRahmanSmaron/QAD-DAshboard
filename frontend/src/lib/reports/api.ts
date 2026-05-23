@@ -1,4 +1,5 @@
 import type {
+  BuyerListResponse,
   Report,
   ReportCreatePayload,
   ReportListResponse,
@@ -6,6 +7,8 @@ import type {
   ReportMetricCreatePayload,
   ReportRow,
   ReportRowCreatePayload,
+  ReportTypeListResponse,
+  UnitListResponse,
 } from "@/lib/reports/types";
 
 type ApiErrorBody = {
@@ -72,4 +75,16 @@ export function createReportMetric(reportId: string, payload: ReportMetricCreate
     method: "POST",
     body: payload,
   });
+}
+
+export function listBuyers() {
+  return request<BuyerListResponse>("/api/buyers");
+}
+
+export function listUnits() {
+  return request<UnitListResponse>("/api/units");
+}
+
+export function listReportTypes() {
+  return request<ReportTypeListResponse>("/api/report-types");
 }

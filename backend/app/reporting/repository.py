@@ -147,3 +147,30 @@ def add_report_row(session: AsyncSession, row: ReportRow) -> None:
 
 def add_report_metric(session: AsyncSession, metric: ReportMetric) -> None:
     session.add(metric)
+
+
+async def list_active_buyers(session: AsyncSession) -> list[Buyer]:
+    result = await session.execute(
+        select(Buyer)
+        .where(Buyer.deleted_at.is_(None), Buyer.is_active.is_(True))
+        .order_by(Buyer.name)
+    )
+    return list(result.scalars().all())
+
+
+async def list_active_units(session: AsyncSession) -> list[Unit]:
+    result = await session.execute(
+        select(Unit)
+        .where(Unit.deleted_at.is_(None), Unit.is_active.is_(True))
+        .order_by(Unit.name)
+    )
+    return list(result.scalars().all())
+
+
+async def list_active_report_types(session: AsyncSession) -> list[ReportType]:
+    result = await session.execute(
+        select(ReportType)
+        .where(ReportType.deleted_at.is_(None), ReportType.is_active.is_(True))
+        .order_by(ReportType.name, ReportType.version)
+    )
+    return list(result.scalars().all())

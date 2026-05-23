@@ -22,6 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.auth import models as _auth_models  # noqa: F401  register `users` FK target
 from app.db.base import Base
 
 
