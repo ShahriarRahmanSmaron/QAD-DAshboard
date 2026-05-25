@@ -28,9 +28,10 @@ from app.db.base import Base
 
 class ReportStatus(StrEnum):
     DRAFT = "draft"
-    SUBMITTED = "submitted"
+    IN_REVIEW = "in_review"
     APPROVED = "approved"
     REJECTED = "rejected"
+    LOCKED = "locked"
     ARCHIVED = "archived"
 
 
@@ -344,7 +345,7 @@ class Report(TimestampMixin, SoftDeleteMixin, AuditFieldsMixin, Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status in ('draft', 'submitted', 'approved', 'rejected', 'archived')",
+            "status in ('draft', 'in_review', 'approved', 'rejected', 'locked', 'archived')",
             name="reports_status_check",
         ),
         CheckConstraint(

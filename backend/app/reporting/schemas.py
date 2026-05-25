@@ -121,6 +121,10 @@ class ReportResponse(BaseModel):
     status: ReportStatus
     title: str | None
     remarks: str | None
+    submitted_at: datetime | None
+    submitted_by_user_id: UUID | None
+    approved_at: datetime | None
+    approved_by_user_id: UUID | None
     metadata: JsonObject
     created_at: datetime
     updated_at: datetime
@@ -155,6 +159,10 @@ class ReportSummary(BaseModel):
     status: ReportStatus
     title: str | None
     remarks: str | None
+    submitted_at: datetime | None
+    submitted_by_user_id: UUID | None
+    approved_at: datetime | None
+    approved_by_user_id: UUID | None
     row_count: int
     metric_count: int
     created_at: datetime
@@ -166,6 +174,10 @@ class ReportSummaryListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ReportWorkflowTransitionResponse(BaseModel):
+    report: ReportResponse
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import type {
   ReportRow,
   ReportRowCreatePayload,
   ReportSummaryListResponse,
+  ReportWorkflowAction,
   ReportTypeListResponse,
   UnitListResponse,
 } from "@/lib/reports/types";
@@ -83,6 +84,12 @@ export function bulkSaveReport(payload: BulkReportSavePayload) {
   return request<Report>("/api/reports/save", {
     method: "POST",
     body: payload,
+  });
+}
+
+export function transitionReportWorkflow(reportId: string, action: ReportWorkflowAction) {
+  return request<Report>(`/api/reports/${reportId}/workflow/${action}`, {
+    method: "POST",
   });
 }
 

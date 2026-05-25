@@ -36,6 +36,20 @@ export type ReportTemplatePinnedRow = {
   values?: Record<string, string | boolean>;
 };
 
+export type ReportTemplateRowRole = "editable" | "readonly" | "summary" | "calculated";
+
+export type ReportTemplateRow = {
+  key: string;
+  label: string;
+  rowGroup: string;
+  sourceSheetName?: string | null;
+  sourceRowNumber?: number | null;
+  role?: ReportTemplateRowRole;
+  readonly?: boolean;
+  visualLevel?: 0 | 1 | 2;
+  metricDefaults?: Record<string, string | boolean>;
+};
+
 export type ReportTemplateSummaryBehavior = {
   showRowCount: boolean;
   showMetricCount: boolean;
@@ -51,6 +65,7 @@ export type ReportTemplate = {
   baseColumns: ReportTemplateBaseColumn[];
   metricColumns: ReportTemplateMetricColumn[];
   sections: ReportTemplateSection[];
+  rows: ReportTemplateRow[];
   pinnedRows: ReportTemplatePinnedRow[];
   readonlyRowKeys?: string[];
   summary: ReportTemplateSummaryBehavior;
@@ -96,6 +111,23 @@ export function validateReportTemplate(template: ReportTemplate) {
       errors.push(`${template.name} metric "${metric.key}" references an invalid section.`);
     }
     metricKeys.add(metric.key.toLowerCase());
+  }
+
+  const rowKeys = new Set<string>();
+  for (const row of template.rows) {
+    if (!row.key.trim()) {
+      errors.push(`${template.name} has a template row without a key.`);
+    }
+    if (!row.label.trim()) {
+      errors.push(`${template.name} row "${row.key}" needs a label.`);
+    }
+    if (!rowGroups.has(row.rowGroup.toLowerCase())) {
+      errors.push(`${template.name} row "${row.key}" references an invalid section.`);
+    }
+    if (rowKeys.has(row.key.toLowerCase())) {
+      errors.push(`${template.name} has duplicate template row key "${row.key}".`);
+    }
+    rowKeys.add(row.key.toLowerCase());
   }
 
   return errors;

@@ -1,4 +1,5 @@
-export type ReportStatus = "draft" | "submitted" | "approved" | "rejected" | "archived";
+export type ReportStatus = "draft" | "in_review" | "approved" | "rejected" | "locked" | "archived";
+export type ReportWorkflowAction = "submit_for_review" | "approve" | "reject" | "lock" | "archive";
 export type ReportValueType = "text" | "number" | "date" | "boolean";
 
 export type ReportMetric = {
@@ -52,6 +53,10 @@ export type Report = {
   status: ReportStatus;
   title: string | null;
   remarks: string | null;
+  submitted_at: string | null;
+  submitted_by_user_id: string | null;
+  approved_at: string | null;
+  approved_by_user_id: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -169,6 +174,10 @@ export type ReportSummary = {
   status: ReportStatus;
   title: string | null;
   remarks: string | null;
+  submitted_at: string | null;
+  submitted_by_user_id: string | null;
+  approved_at: string | null;
+  approved_by_user_id: string | null;
   row_count: number;
   metric_count: number;
   created_at: string;

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.constants import UserRole
 from app.auth.schemas import AuthUser
 from app.reporting import repository
 from app.reporting.models import (
@@ -92,6 +93,10 @@ def serialize_report(report: Report) -> ReportResponse:
         status=ReportStatus(report.status),
         title=report.title,
         remarks=report.remarks,
+        submitted_at=report.submitted_at,
+        submitted_by_user_id=report.submitted_by_user_id,
+        approved_at=report.approved_at,
+        approved_by_user_id=report.approved_by_user_id,
         metadata=report.metadata_,
         created_at=report.created_at,
         updated_at=report.updated_at,
@@ -118,6 +123,8 @@ def add_audit_log(
     target_type: str,
     target_id: UUID,
     metadata: dict[str, Any],
+    old_values: dict[str, Any] | None = None,
+    new_values: dict[str, Any] | None = None,
 ) -> None:
     session.add(
         AuditLog(
@@ -128,8 +135,67 @@ def add_audit_log(
             entity_id=str(target_id),
             target_type=target_type,
             target_id=target_id,
+            old_values=old_values or {},
+            new_values=new_values or {},
             metadata_=metadata,
         )
+    )
+
+
+LOCKED_REPORT_STATUSES = {
+    ReportStatus.IN_REVIEW.value,
+    ReportStatus.APPROVED.value,
+    ReportStatus.LOCKED.value,
+    ReportStatus.ARCHIVED.value,
+}
+
+WORKFLOW_TRANSITIONS: dict[str, set[str]] = {
+    "submit_for_review": {ReportStatus.DRAFT.value, ReportStatus.REJECTED.value},
+    "approve": {ReportStatus.IN_REVIEW.value},
+    "reject": {ReportStatus.IN_REVIEW.value},
+    "lock": {
+        ReportStatus.DRAFT.value,
+        ReportStatus.IN_REVIEW.value,
+        ReportStatus.APPROVED.value,
+        ReportStatus.REJECTED.value,
+    },
+    "archive": {
+        ReportStatus.DRAFT.value,
+        ReportStatus.IN_REVIEW.value,
+        ReportStatus.APPROVED.value,
+        ReportStatus.REJECTED.value,
+        ReportStatus.LOCKED.value,
+    },
+}
+
+WORKFLOW_TARGET_STATUS = {
+    "submit_for_review": ReportStatus.IN_REVIEW.value,
+    "approve": ReportStatus.APPROVED.value,
+    "reject": ReportStatus.REJECTED.value,
+    "lock": ReportStatus.LOCKED.value,
+    "archive": ReportStatus.ARCHIVED.value,
+}
+
+EDITOR_WORKFLOW_ACTIONS = {"submit_for_review"}
+ADMIN_WORKFLOW_ACTIONS = {"approve", "reject", "lock", "archive"}
+
+
+def _ensure_report_editable(report: Report) -> None:
+    if report.status in LOCKED_REPORT_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Report is {report.status} and cannot be edited.",
+        )
+
+
+def _ensure_workflow_permission(actor: AuthUser, action: str) -> None:
+    if actor.role == UserRole.ADMIN:
+        return
+    if actor.role == UserRole.EDITOR and action in EDITOR_WORKFLOW_ACTIONS:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to perform this workflow action.",
     )
 
 
@@ -202,6 +268,7 @@ async def create_report_row(
     report = await repository.get_writable_report(session, report_id=report_id, user=actor)
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+    _ensure_report_editable(report)
 
     row = ReportRow(
         report_id=report_id,
@@ -248,6 +315,7 @@ async def create_report_metric(
     report = await repository.get_writable_report(session, report_id=report_id, user=actor)
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+    _ensure_report_editable(report)
 
     if payload.row_id is not None:
         row = await repository.get_report_row(session, report_id=report_id, row_id=payload.row_id)
@@ -314,6 +382,10 @@ def serialize_report_summary(row: dict) -> ReportSummary:
         status=ReportStatus(row["status"]),
         title=row.get("title"),
         remarks=row.get("remarks"),
+        submitted_at=row.get("submitted_at"),
+        submitted_by_user_id=row.get("submitted_by_user_id"),
+        approved_at=row.get("approved_at"),
+        approved_by_user_id=row.get("approved_by_user_id"),
         row_count=row.get("row_count", 0),
         metric_count=row.get("metric_count", 0),
         created_at=row["created_at"],
@@ -391,7 +463,8 @@ async def bulk_save_report(
                 detail="An active report already exists for this type, buyer, unit, and date.",
             ) from exc
     else:
-        deleted_at = datetime.now(timezone.utc)
+        _ensure_report_editable(report)
+        deleted_at = datetime.now(UTC)
         for metric in report.metrics:
             if metric.deleted_at is None:
                 metric.deleted_at = deleted_at
@@ -442,7 +515,7 @@ async def bulk_save_report(
             ) from exc
 
     # Now create metrics attached to their rows
-    for row, row_payload in zip(all_rows, payload.rows):
+    for row, row_payload in zip(all_rows, payload.rows, strict=True):
         for metric_payload in row_payload.metrics:
             metric = ReportMetric(
                 report_id=report.id,
@@ -508,6 +581,67 @@ async def bulk_save_report(
             "row_count": len(all_rows),
             "metric_count": len(all_metrics),
             "mode": "update" if is_update else "create",
+        },
+    )
+    await session.flush()
+    return report
+
+
+async def transition_report_workflow(
+    session: AsyncSession,
+    *,
+    report_id: UUID,
+    action: str,
+    actor: AuthUser,
+) -> Report:
+    _ensure_workflow_permission(actor, action)
+    if action not in WORKFLOW_TARGET_STATUS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workflow action not found.",
+        )
+
+    report = await repository.get_accessible_report(session, report_id=report_id, user=actor)
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+
+    previous_status = report.status
+    allowed_previous_states = WORKFLOW_TRANSITIONS[action]
+    if previous_status not in allowed_previous_states:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot {action.replace('_', ' ')} a {previous_status} report.",
+        )
+
+    next_status = WORKFLOW_TARGET_STATUS[action]
+    now = datetime.now(UTC)
+    report.status = next_status
+    report.updated_by_user_id = actor.id
+
+    if action == "submit_for_review":
+        report.submitted_at = now
+        report.submitted_by_user_id = actor.id
+        report.approved_at = None
+        report.approved_by_user_id = None
+    elif action == "approve":
+        report.approved_at = now
+        report.approved_by_user_id = actor.id
+    elif action == "reject":
+        report.approved_at = None
+        report.approved_by_user_id = None
+
+    add_audit_log(
+        session,
+        actor=actor,
+        action=f"report.workflow.{action}",
+        target_type="report",
+        target_id=report.id,
+        old_values={"status": previous_status},
+        new_values={"status": next_status},
+        metadata={
+            "previous_state": previous_status,
+            "new_state": next_status,
+            "transition": action,
         },
     )
     await session.flush()

@@ -29,6 +29,7 @@ from app.reporting.service import (
     serialize_report,
     serialize_report_summary,
     serialize_row,
+    transition_report_workflow,
 )
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -130,6 +131,37 @@ async def get_report(
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
     return serialize_report(report)
+
+
+@router.post("/{report_id}/workflow/{workflow_action}", response_model=ReportResponse)
+async def transition_report(
+    report_id: UUID,
+    workflow_action: str,
+    session: SessionDep,
+    user: ReportWriterDep,
+) -> ReportResponse:
+    if workflow_action not in {"submit_for_review", "approve", "reject", "lock", "archive"}:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workflow action not found.",
+        )
+
+    try:
+        report = await transition_report_workflow(
+            session,
+            report_id=report_id,
+            action=workflow_action,
+            actor=user,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+    loaded = await repository.get_accessible_report(session, report_id=report.id, user=user)
+    if loaded is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+    return serialize_report(loaded)
 
 
 @router.post(

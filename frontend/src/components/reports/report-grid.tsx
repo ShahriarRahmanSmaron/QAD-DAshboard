@@ -13,14 +13,18 @@ import {
   type RowStyle,
 } from "ag-grid-community";
 import {
+  ChevronDown,
+  ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
   Copy,
   Loader2,
   Plus,
+  Redo2,
   RotateCcw,
   Save,
   Trash2,
+  Undo2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -33,6 +37,7 @@ import type {
   ReportMetric,
   ReportRow,
   ReportValueType,
+  ReportWorkflowAction,
 } from "@/lib/reports/types";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -76,8 +81,11 @@ type GridRow = {
   __created: boolean;
   __readonly: boolean;
   __rowKind: "data" | "section";
+  __rowRole: "editable" | "readonly" | "summary" | "calculated";
+  __visualLevel: 0 | 1 | 2;
   __sectionId: string | null;
   __templateRow: boolean;
+  __dirtyFields: Record<string, boolean>;
   __metricMeta: Record<string, MetricCellMeta>;
   [field: string]: unknown;
 };
@@ -96,9 +104,10 @@ type MetricDraft = {
   unitOfMeasure: string;
 };
 
-type GridState = GridModel & {
-  baseline: GridModel;
-  reportId: string | null;
+type GridHistorySnapshot = {
+  rows: GridRow[];
+  metricColumns: MetricColumn[];
+  pinnedTopRows: GridRow[];
   selectedRowId: string | null;
   selectedMetricField: string;
   metricDraft: MetricDraft;
@@ -107,6 +116,22 @@ type GridState = GridModel & {
   updatedRowIds: Set<string>;
   deletedRowIds: Set<string>;
   deletedRows: GridRow[];
+};
+
+type GridState = GridModel & {
+  baseline: GridModel;
+  reportId: string | null;
+  selectedRowId: string | null;
+  selectedMetricField: string;
+  metricDraft: MetricDraft;
+  collapsedSectionIds: Set<string>;
+  dirtyRowIds: Set<string>;
+  createdRowIds: Set<string>;
+  updatedRowIds: Set<string>;
+  deletedRowIds: Set<string>;
+  deletedRows: GridRow[];
+  historyPast: GridHistorySnapshot[];
+  historyFuture: GridHistorySnapshot[];
   validationErrors: string[];
   error: string | null;
   message: string | null;
@@ -126,6 +151,11 @@ type GridAction =
   | { type: "delete_row"; rowId: string }
   | { type: "upsert_metric" }
   | { type: "delete_metric"; field: string }
+  | { type: "undo_structure" }
+  | { type: "redo_structure" }
+  | { type: "toggle_section"; sectionId: string }
+  | { type: "collapse_all_sections" }
+  | { type: "expand_all_sections" }
   | { type: "reset_changes" }
   | { type: "validation_error"; errors: string[] }
   | { type: "saving" }
@@ -138,6 +168,14 @@ type ReportGridProps = {
   template?: ReportTemplate | null;
   onDirtyChange?: (hasDirtyChanges: boolean) => void;
   onSaved?: (report: Report) => void;
+  onWorkflowAction?: (action: ReportWorkflowAction) => Promise<void> | void;
+  isWorkflowTransitioning?: boolean;
+};
+
+type GridViewportSnapshot = {
+  firstRowId: string | null;
+  focusedRowId: string | null;
+  focusedColumnId: string | null;
 };
 
 const emptyMetricDraft: MetricDraft = {
@@ -145,6 +183,34 @@ const emptyMetricDraft: MetricDraft = {
   label: "",
   valueType: "number",
   unitOfMeasure: "",
+};
+
+const workflowReadonlyStatuses = new Set(["in_review", "approved", "locked", "archived"]);
+
+const workflowStatusLabels: Record<Report["status"], string> = {
+  draft: "Draft",
+  in_review: "In Review",
+  approved: "Approved",
+  rejected: "Rejected",
+  locked: "Locked",
+  archived: "Archived",
+};
+
+const workflowActionLabels: Record<ReportWorkflowAction, string> = {
+  submit_for_review: "Submit",
+  approve: "Approve",
+  reject: "Reject",
+  lock: "Lock",
+  archive: "Archive",
+};
+
+const workflowActionsByStatus: Record<Report["status"], ReportWorkflowAction[]> = {
+  draft: ["submit_for_review", "lock", "archive"],
+  in_review: ["approve", "reject", "lock", "archive"],
+  approved: ["lock", "archive"],
+  rejected: ["submit_for_review", "lock", "archive"],
+  locked: ["archive"],
+  archived: [],
 };
 
 function metricValue(metric: ReportMetric) {
@@ -257,6 +323,23 @@ function mapReportToGrid(report: Report | null, template: ReportTemplate | null 
   };
 }
 
+function stableRowIdFromReportRow(row: ReportRow) {
+  const rowKey = row.row_key?.trim();
+  if (rowKey) {
+    return `report_row_${normalizeFieldPart(rowKey).toLowerCase()}`;
+  }
+
+  return `report_row_${row.id}`;
+}
+
+function findTemplateRow(rowKey: string, template: ReportTemplate | null) {
+  if (!rowKey || !template) {
+    return null;
+  }
+
+  return template.rows.find((row) => row.key.toLowerCase() === rowKey.toLowerCase()) ?? null;
+}
+
 function mapReportRow(
   row: ReportRow,
   fieldByMetricKey: Map<string, string>,
@@ -264,10 +347,14 @@ function mapReportRow(
   template: ReportTemplate | null,
 ): GridRow {
   const section = findTemplateSection(row.row_group, template);
+  const templateRow = findTemplateRow(row.row_key ?? "", template);
   const readonlyRowKeys = new Set(template?.readonlyRowKeys ?? []);
   const rowKey = row.row_key ?? "";
+  const isReadonly =
+    readonlyRowKeys.has(rowKey) || Boolean(section?.readonly) || Boolean(templateRow?.readonly);
+  const rowRole = templateRow?.role ?? (isReadonly ? "readonly" : "editable");
   const gridRow: GridRow = {
-    id: row.id,
+    id: stableRowIdFromReportRow(row),
     rowId: row.id,
     row_key: rowKey,
     row_label: row.row_label ?? "",
@@ -278,10 +365,13 @@ function mapReportRow(
     metadata: row.metadata,
     __dirty: false,
     __created: false,
-    __readonly: readonlyRowKeys.has(rowKey) || Boolean(section?.readonly),
+    __readonly: isReadonly || rowRole !== "editable",
     __rowKind: "data",
+    __rowRole: rowRole,
+    __visualLevel: templateRow?.visualLevel ?? (rowRole === "summary" ? 0 : 1),
     __sectionId: section?.id ?? null,
-    __templateRow: Boolean(section),
+    __templateRow: Boolean(templateRow),
+    __dirtyFields: {},
     __metricMeta: {},
   };
 
@@ -346,10 +436,12 @@ function applyTemplateSections(rows: GridRow[], template: ReportTemplate | null)
     output.push(createSectionRow(section.id, section.label, section.rowGroup));
     const sectionRows = rows.filter((row) => row.row_group === section.rowGroup);
     for (const row of sectionRows) {
+      const sectionReadonly = Boolean(section.readonly);
       output.push({
         ...row,
         __sectionId: section.id,
-        __readonly: row.__readonly || Boolean(section.readonly),
+        __readonly: row.__readonly || sectionReadonly,
+        __rowRole: sectionReadonly && row.__rowRole === "editable" ? "readonly" : row.__rowRole,
       });
       consumedRowIds.add(row.id);
     }
@@ -379,8 +471,11 @@ function createSectionRow(sectionId: string, label: string, rowGroup: string): G
     __created: false,
     __readonly: true,
     __rowKind: "section",
+    __rowRole: "summary",
+    __visualLevel: 0,
     __sectionId: sectionId,
     __templateRow: true,
+    __dirtyFields: {},
     __metricMeta: {},
   };
 }
@@ -407,8 +502,11 @@ function buildPinnedRows(template: ReportTemplate | null, metricColumns: MetricC
         __created: false,
         __readonly: true,
         __rowKind: "section",
+        __rowRole: "summary",
+        __visualLevel: 0,
         __sectionId: "summary",
         __templateRow: true,
+        __dirtyFields: {},
         __metricMeta: {},
       };
 
@@ -476,8 +574,11 @@ function createDraftRow(
     __created: true,
     __readonly: false,
     __rowKind: "data",
+    __rowRole: "editable",
+    __visualLevel: sectionSource?.__rowKind === "data" ? sectionSource.__visualLevel : 1,
     __sectionId: sectionSource?.__sectionId ?? null,
     __templateRow: false,
+    __dirtyFields: {},
     __metricMeta: {},
   };
 
@@ -502,7 +603,10 @@ function createDuplicateRow(source: GridRow, index: number, existingRows: GridRo
     __created: true,
     __readonly: false,
     __rowKind: "data",
+    __rowRole: "editable",
+    __visualLevel: source.__visualLevel,
     __templateRow: false,
+    __dirtyFields: { ...source.__dirtyFields },
     __metricMeta: Object.fromEntries(
       Object.entries(source.__metricMeta).map(([field, meta]) => [field, { ...meta }]),
     ),
@@ -561,10 +665,91 @@ function metricMetaFromColumn(column: MetricColumn): MetricCellMeta {
 function copyRows(rows: GridRow[]) {
   return rows.map((row) => ({
     ...row,
+    __dirtyFields: { ...row.__dirtyFields },
     __metricMeta: Object.fromEntries(
       Object.entries(row.__metricMeta).map(([field, meta]) => [field, { ...meta }]),
     ),
   }));
+}
+
+const maxHistoryDepth = 20;
+
+function copyMetricColumns(columns: MetricColumn[]) {
+  return columns.map((column) => ({ ...column }));
+}
+
+function copyMetricDraft(draft: MetricDraft): MetricDraft {
+  return { ...draft };
+}
+
+function captureHistorySnapshot(state: GridState): GridHistorySnapshot {
+  return {
+    rows: copyRows(state.rows),
+    metricColumns: copyMetricColumns(state.metricColumns),
+    pinnedTopRows: copyRows(state.pinnedTopRows),
+    selectedRowId: state.selectedRowId,
+    selectedMetricField: state.selectedMetricField,
+    metricDraft: copyMetricDraft(state.metricDraft),
+    dirtyRowIds: new Set(state.dirtyRowIds),
+    createdRowIds: new Set(state.createdRowIds),
+    updatedRowIds: new Set(state.updatedRowIds),
+    deletedRowIds: new Set(state.deletedRowIds),
+    deletedRows: copyRows(state.deletedRows),
+  };
+}
+
+function restoreHistorySnapshot(
+  state: GridState,
+  snapshot: GridHistorySnapshot,
+  message: string,
+): GridState {
+  return {
+    ...state,
+    rows: copyRows(snapshot.rows),
+    metricColumns: copyMetricColumns(snapshot.metricColumns),
+    pinnedTopRows: copyRows(snapshot.pinnedTopRows),
+    selectedRowId: snapshot.selectedRowId,
+    selectedMetricField: snapshot.selectedMetricField,
+    metricDraft: copyMetricDraft(snapshot.metricDraft),
+    dirtyRowIds: new Set(snapshot.dirtyRowIds),
+    createdRowIds: new Set(snapshot.createdRowIds),
+    updatedRowIds: new Set(snapshot.updatedRowIds),
+    deletedRowIds: new Set(snapshot.deletedRowIds),
+    deletedRows: copyRows(snapshot.deletedRows),
+    validationErrors: [],
+    error: null,
+    message,
+  };
+}
+
+function withStructuralHistory(state: GridState, nextState: GridState): GridState {
+  return {
+    ...nextState,
+    historyPast: [...state.historyPast.slice(-(maxHistoryDepth - 1)), captureHistorySnapshot(state)],
+    historyFuture: [],
+  };
+}
+
+function applyCollapsedRows(rows: GridRow[], collapsedSectionIds: Set<string>) {
+  const output: GridRow[] = [];
+  let hiddenSectionId: string | null = null;
+
+  for (const row of rows) {
+    if (row.__rowKind === "section") {
+      output.push(row);
+      hiddenSectionId =
+        row.__sectionId && collapsedSectionIds.has(row.__sectionId) ? row.__sectionId : null;
+      continue;
+    }
+
+    if (hiddenSectionId && row.__sectionId === hiddenSectionId) {
+      continue;
+    }
+
+    output.push(row);
+  }
+
+  return output;
 }
 
 function markRowsChanged(
@@ -600,7 +785,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       ...model,
       baseline: {
         rows: copyRows(model.rows),
-        metricColumns: model.metricColumns.map((column) => ({ ...column })),
+        metricColumns: copyMetricColumns(model.metricColumns),
         pinnedTopRows: copyRows(model.pinnedTopRows),
         templateErrors: [...model.templateErrors],
       },
@@ -613,6 +798,9 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       updatedRowIds: new Set(),
       deletedRowIds: new Set(),
       deletedRows: [],
+      collapsedSectionIds: new Set(),
+      historyPast: [],
+      historyFuture: [],
       validationErrors: [],
       error: null,
       message: null,
@@ -664,6 +852,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
             ...row,
             [action.field]: action.value,
             __dirty: true,
+            __dirtyFields: { ...row.__dirtyFields, [action.field]: true },
           }
         : row,
     );
@@ -681,13 +870,15 @@ function gridReducer(state: GridState, action: GridAction): GridState {
 
   if (action.type === "add_row") {
     const selectedIndex = state.rows.findIndex((row) => row.id === state.selectedRowId);
+    const selectedRow = state.rows.find((row) => row.id === state.selectedRowId);
     const insertIndex =
       action.position === "end" || selectedIndex < 0
         ? state.rows.length
+        : selectedRow?.__rowKind === "section"
+          ? selectedIndex + 1
         : action.position === "above"
           ? selectedIndex
           : selectedIndex + 1;
-    const selectedRow = state.rows.find((row) => row.id === state.selectedRowId);
     const nextRow = createDraftRow(insertIndex, state.metricColumns, state.rows, selectedRow);
     const rows = [
       ...state.rows.slice(0, insertIndex),
@@ -699,7 +890,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
     createdRowIds.add(nextRow.id);
     dirtyRowIds.add(nextRow.id);
 
-    return {
+    return withStructuralHistory(state, {
       ...state,
       rows,
       selectedRowId: nextRow.id,
@@ -708,13 +899,13 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       validationErrors: [],
       error: null,
       message: null,
-    };
+    });
   }
 
   if (action.type === "duplicate_row") {
     const sourceIndex = state.rows.findIndex((row) => row.id === action.rowId);
     const sourceRow = state.rows[sourceIndex];
-    if (sourceIndex < 0 || !sourceRow || sourceRow.__rowKind !== "data") {
+    if (sourceIndex < 0 || !sourceRow || !isEditableDataRow(sourceRow)) {
       return state;
     }
 
@@ -730,7 +921,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
     createdRowIds.add(duplicateRow.id);
     dirtyRowIds.add(duplicateRow.id);
 
-    return {
+    return withStructuralHistory(state, {
       ...state,
       rows,
       selectedRowId: duplicateRow.id,
@@ -739,7 +930,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       validationErrors: [],
       error: null,
       message: null,
-    };
+    });
   }
 
   if (action.type === "delete_row") {
@@ -766,7 +957,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       deletedRows.push(rowToDelete);
     }
 
-    return {
+    return withStructuralHistory(state, {
       ...state,
       rows,
       createdRowIds,
@@ -778,7 +969,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       validationErrors: [],
       error: null,
       message: null,
-    };
+    });
   }
 
   if (action.type === "upsert_metric") {
@@ -830,6 +1021,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
           ...row,
           [state.selectedMetricField]: nextValue,
           __dirty: true,
+          __dirtyFields: { ...row.__dirtyFields, [state.selectedMetricField]: true },
           __metricMeta: {
             ...row.__metricMeta,
             [state.selectedMetricField]: nextMeta,
@@ -838,7 +1030,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       });
       const rowTracking = markRowsChanged(state, rows, changedRowIds);
 
-      return {
+      return withStructuralHistory(state, {
         ...state,
         ...rowTracking,
         rows,
@@ -856,7 +1048,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
         validationErrors: [],
         error: null,
         message: null,
-      };
+      });
     }
 
     const existingFields = new Set(state.metricColumns.map((column) => column.field));
@@ -875,6 +1067,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
             ...row,
             [column.field]: defaultMetricValue(column.valueType, column),
             __dirty: true,
+            __dirtyFields: { ...row.__dirtyFields, [column.field]: true },
             __metricMeta: {
               ...row.__metricMeta,
               [column.field]: metricMetaFromColumn(column),
@@ -884,7 +1077,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
     );
     const rowTracking = markRowsChanged(state, rows, changedRowIds);
 
-    return {
+    return withStructuralHistory(state, {
       ...state,
       ...rowTracking,
       rows,
@@ -899,7 +1092,7 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       validationErrors: [],
       error: null,
       message: null,
-    };
+    });
   }
 
   if (action.type === "delete_metric") {
@@ -907,6 +1100,9 @@ function gridReducer(state: GridState, action: GridAction): GridState {
     if (!column) {
       return state;
     }
+    const deletedColumnIndex = state.metricColumns.findIndex(
+      (metricColumn) => metricColumn.field === action.field,
+    );
 
     const rows = state.rows.map((row) => {
       if (row.__rowKind !== "data") {
@@ -914,39 +1110,116 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       }
       const nextRow = { ...row };
       const metricMeta = { ...row.__metricMeta };
+      const dirtyFields = { ...row.__dirtyFields };
       delete nextRow[action.field];
       delete metricMeta[action.field];
+      delete dirtyFields[action.field];
 
       return {
         ...nextRow,
         __dirty: true,
+        __dirtyFields: dirtyFields,
         __metricMeta: metricMeta,
       } as GridRow;
     });
+    const pinnedTopRows = state.pinnedTopRows.map((row) => {
+      const nextRow = { ...row };
+      const metricMeta = { ...row.__metricMeta };
+      delete nextRow[action.field];
+      delete metricMeta[action.field];
+      return { ...nextRow, __metricMeta: metricMeta } as GridRow;
+    });
     const rowTracking = markRowsChanged(state, rows, dataRows(rows).map((row) => row.id));
+    const metricColumns = state.metricColumns
+      .filter((metricColumn) => metricColumn.field !== action.field)
+      .map((metricColumn, index) => ({ ...metricColumn, sortOrder: index }));
+    const nextSelectedMetricField =
+      state.selectedMetricField === action.field
+        ? metricColumns[Math.min(deletedColumnIndex, metricColumns.length - 1)]?.field ?? ""
+        : state.selectedMetricField;
+    const nextSelectedMetricColumn = metricColumns.find(
+      (metricColumn) => metricColumn.field === nextSelectedMetricField,
+    );
 
-    return {
+    return withStructuralHistory(state, {
       ...state,
       ...rowTracking,
       rows,
-      metricColumns: state.metricColumns
-        .filter((metricColumn) => metricColumn.field !== action.field)
-        .map((metricColumn, index) => ({ ...metricColumn, sortOrder: index })),
-      selectedMetricField:
-        state.selectedMetricField === action.field ? "" : state.selectedMetricField,
-      metricDraft: emptyMetricDraft,
+      pinnedTopRows,
+      metricColumns,
+      selectedMetricField: nextSelectedMetricField,
+      metricDraft: nextSelectedMetricColumn
+        ? {
+            key: nextSelectedMetricColumn.key,
+            label: nextSelectedMetricColumn.label,
+            valueType: nextSelectedMetricColumn.valueType,
+            unitOfMeasure: nextSelectedMetricColumn.unitOfMeasure ?? "",
+          }
+        : emptyMetricDraft,
       validationErrors: [],
       error: null,
       message: null,
+    });
+  }
+
+  if (action.type === "undo_structure") {
+    const previous = state.historyPast.at(-1);
+    if (!previous) {
+      return state;
+    }
+
+    return {
+      ...restoreHistorySnapshot(state, previous, "Structural change undone"),
+      historyPast: state.historyPast.slice(0, -1),
+      historyFuture: [captureHistorySnapshot(state), ...state.historyFuture].slice(0, maxHistoryDepth),
     };
+  }
+
+  if (action.type === "redo_structure") {
+    const next = state.historyFuture[0];
+    if (!next) {
+      return state;
+    }
+
+    return {
+      ...restoreHistorySnapshot(state, next, "Structural change redone"),
+      historyPast: [...state.historyPast, captureHistorySnapshot(state)].slice(-maxHistoryDepth),
+      historyFuture: state.historyFuture.slice(1),
+    };
+  }
+
+  if (action.type === "toggle_section") {
+    const collapsedSectionIds = new Set(state.collapsedSectionIds);
+    if (collapsedSectionIds.has(action.sectionId)) {
+      collapsedSectionIds.delete(action.sectionId);
+    } else {
+      collapsedSectionIds.add(action.sectionId);
+    }
+    return { ...state, collapsedSectionIds };
+  }
+
+  if (action.type === "collapse_all_sections") {
+    return {
+      ...state,
+      collapsedSectionIds: new Set(
+        state.rows
+          .filter((row) => row.__rowKind === "section" && row.__sectionId)
+          .map((row) => row.__sectionId as string),
+      ),
+    };
+  }
+
+  if (action.type === "expand_all_sections") {
+    return { ...state, collapsedSectionIds: new Set() };
   }
 
   if (action.type === "reset_changes") {
     return {
       ...state,
       rows: copyRows(state.baseline.rows),
-      metricColumns: state.baseline.metricColumns.map((column) => ({ ...column })),
-      selectedRowId: state.baseline.rows[0]?.id ?? null,
+      metricColumns: copyMetricColumns(state.baseline.metricColumns),
+      pinnedTopRows: copyRows(state.baseline.pinnedTopRows),
+      selectedRowId: dataRows(state.baseline.rows)[0]?.id ?? null,
       selectedMetricField: "",
       metricDraft: emptyMetricDraft,
       dirtyRowIds: new Set(),
@@ -954,6 +1227,8 @@ function gridReducer(state: GridState, action: GridAction): GridState {
       updatedRowIds: new Set(),
       deletedRowIds: new Set(),
       deletedRows: [],
+      historyPast: [],
+      historyFuture: [],
       validationErrors: [],
       error: null,
       message: "Changes reverted",
@@ -975,23 +1250,40 @@ function gridReducer(state: GridState, action: GridAction): GridState {
 
   if (action.type === "save_success") {
     const model = mapReportToGrid(action.report, action.template);
+    const selectedRowId =
+      state.selectedRowId && dataRows(model.rows).some((row) => row.id === state.selectedRowId)
+        ? state.selectedRowId
+        : dataRows(model.rows)[0]?.id ?? null;
+    const selectedMetricColumn = state.selectedMetricField
+      ? model.metricColumns.find((column) => column.field === state.selectedMetricField)
+      : null;
     return {
       ...model,
       baseline: {
         rows: copyRows(model.rows),
-        metricColumns: model.metricColumns.map((column) => ({ ...column })),
+        metricColumns: copyMetricColumns(model.metricColumns),
         pinnedTopRows: copyRows(model.pinnedTopRows),
         templateErrors: [...model.templateErrors],
       },
       reportId: action.report.id,
-      selectedRowId: dataRows(model.rows)[0]?.id ?? null,
-      selectedMetricField: "",
-      metricDraft: emptyMetricDraft,
+      selectedRowId,
+      selectedMetricField: selectedMetricColumn?.field ?? "",
+      metricDraft: selectedMetricColumn
+        ? {
+            key: selectedMetricColumn.key,
+            label: selectedMetricColumn.label,
+            valueType: selectedMetricColumn.valueType,
+            unitOfMeasure: selectedMetricColumn.unitOfMeasure ?? "",
+          }
+        : emptyMetricDraft,
+      collapsedSectionIds: new Set(state.collapsedSectionIds),
       dirtyRowIds: new Set(),
       createdRowIds: new Set(),
       updatedRowIds: new Set(),
       deletedRowIds: new Set(),
       deletedRows: [],
+      historyPast: [],
+      historyFuture: [],
       validationErrors: [],
       error: null,
       message: "Saved",
@@ -1011,11 +1303,14 @@ function initialGridState(): GridState {
     selectedRowId: null,
     selectedMetricField: "",
     metricDraft: emptyMetricDraft,
+    collapsedSectionIds: new Set(),
     dirtyRowIds: new Set(),
     createdRowIds: new Set(),
     updatedRowIds: new Set(),
     deletedRowIds: new Set(),
     deletedRows: [],
+    historyPast: [],
+    historyFuture: [],
     validationErrors: [],
     error: null,
     message: null,
@@ -1149,8 +1444,12 @@ export function ReportGrid({
   template = null,
   onDirtyChange,
   onSaved,
+  onWorkflowAction,
+  isWorkflowTransitioning = false,
 }: ReportGridProps) {
   const gridRef = useRef<AgGridReact<GridRow>>(null);
+  const lastMetricFieldSignatureRef = useRef("");
+  const viewportSnapshotRef = useRef<GridViewportSnapshot | null>(null);
   const [state, dispatch] = useReducer(gridReducer, undefined, initialGridState);
 
   const hasUnsavedChanges =
@@ -1158,6 +1457,12 @@ export function ReportGrid({
     state.updatedRowIds.size > 0 ||
     state.deletedRowIds.size > 0 ||
     state.dirtyRowIds.size > 0;
+  const isWorkflowReadonly = Boolean(report && workflowReadonlyStatuses.has(report.status));
+
+  const visibleRows = useMemo(
+    () => applyCollapsedRows(state.rows, state.collapsedSectionIds),
+    [state.collapsedSectionIds, state.rows],
+  );
 
   useEffect(() => {
     dispatch({ type: "load_report", report, template });
@@ -1212,30 +1517,144 @@ export function ReportGrid({
     return () => document.removeEventListener("click", handleDocumentClick, true);
   }, [hasUnsavedChanges]);
 
+  const captureGridViewport = useCallback(() => {
+    const api = gridRef.current?.api;
+    if (!api) {
+      viewportSnapshotRef.current = null;
+      return;
+    }
+
+    const firstDisplayedIndex = api.getFirstDisplayedRowIndex();
+    const focusedCell = api.getFocusedCell();
+    viewportSnapshotRef.current = {
+      firstRowId: api.getDisplayedRowAtIndex(firstDisplayedIndex)?.data?.id ?? null,
+      focusedRowId:
+        typeof focusedCell?.rowIndex === "number"
+          ? api.getDisplayedRowAtIndex(focusedCell.rowIndex)?.data?.id ?? null
+          : null,
+      focusedColumnId: focusedCell?.column.getColId() ?? null,
+    };
+  }, []);
+
+  const restoreGridViewport = useCallback(() => {
+    const snapshot = viewportSnapshotRef.current;
+    const api = gridRef.current?.api;
+    if (!snapshot || !api) {
+      return false;
+    }
+
+    const firstRowIndex = snapshot.firstRowId
+      ? visibleRows.findIndex((row) => row.id === snapshot.firstRowId)
+      : -1;
+    const focusedRowIndex = snapshot.focusedRowId
+      ? visibleRows.findIndex((row) => row.id === snapshot.focusedRowId)
+      : -1;
+
+    window.requestAnimationFrame(() => {
+      if (firstRowIndex >= 0) {
+        api.ensureIndexVisible(firstRowIndex, "top");
+      }
+      if (focusedRowIndex >= 0 && snapshot.focusedColumnId) {
+        api.setFocusedCell(focusedRowIndex, snapshot.focusedColumnId);
+      }
+      viewportSnapshotRef.current = null;
+    });
+
+    return true;
+  }, [visibleRows]);
+
+  useEffect(() => {
+    if (state.message === "Saved") {
+      restoreGridViewport();
+    }
+  }, [restoreGridViewport, state.message]);
+
   useEffect(() => {
     if (!state.selectedRowId) {
       return;
     }
+    if (viewportSnapshotRef.current) {
+      return;
+    }
 
     const api = gridRef.current?.api;
-    const rowIndex = state.rows.findIndex((row) => row.id === state.selectedRowId);
+    const rowIndex = visibleRows.findIndex((row) => row.id === state.selectedRowId);
     if (!api || rowIndex < 0) {
       return;
     }
 
     api.ensureIndexVisible(rowIndex, "middle");
-  }, [state.rows, state.selectedRowId]);
+  }, [state.selectedRowId, visibleRows]);
+
+  const metricFieldSignature = state.metricColumns.map((column) => column.field).join("|");
+
+  useEffect(() => {
+    if (lastMetricFieldSignatureRef.current === metricFieldSignature) {
+      return;
+    }
+    lastMetricFieldSignatureRef.current = metricFieldSignature;
+
+    const api = gridRef.current?.api;
+    if (!api || !state.selectedRowId) {
+      return;
+    }
+
+    const rowIndex = visibleRows.findIndex((row) => row.id === state.selectedRowId);
+    if (rowIndex < 0) {
+      return;
+    }
+
+    const availableColumnIds = new Set([
+      "__dirty",
+      "__row_number",
+      "row_label",
+      "row_group",
+      "row_key",
+      ...state.metricColumns.map((column) => column.field),
+    ]);
+    const focusedColumnId = api.getFocusedCell()?.column.getColId();
+    const nextColumnId =
+      focusedColumnId && availableColumnIds.has(focusedColumnId)
+        ? focusedColumnId
+        : state.selectedMetricField && availableColumnIds.has(state.selectedMetricField)
+          ? state.selectedMetricField
+          : "row_label";
+
+    window.requestAnimationFrame(() => {
+      api.setFocusedCell(rowIndex, nextColumnId);
+    });
+  }, [metricFieldSignature, state.metricColumns, state.selectedMetricField, state.selectedRowId, visibleRows]);
 
   const defaultColDef = useMemo<ColDef<GridRow>>(
     () => ({
-      editable: (params) => Boolean(params.data && isEditableDataRow(params.data)),
+      editable: (params) => Boolean(params.data && !isWorkflowReadonly && isEditableDataRow(params.data)),
       lockVisible: true,
+      suppressMovable: true,
       minWidth: 120,
       resizable: true,
       sortable: true,
       suppressHeaderMenuButton: true,
+      cellStyle: (params) => {
+        const field = params.colDef.field ?? params.column.getColId();
+        if (!params.data || !field) {
+          return null;
+        }
+
+        const style: Record<string, string | number> = {};
+
+        if (field === "row_label" && params.data.__visualLevel > 0) {
+          style.paddingLeft = `${12 + params.data.__visualLevel * 14}px`;
+        }
+
+        if (params.data.__dirtyFields[field]) {
+          style.background = "color-mix(in oklch, var(--accent) 26%, transparent)";
+          style.boxShadow = "inset 0 -2px 0 color-mix(in oklch, var(--primary) 42%, transparent)";
+        }
+
+        return Object.keys(style).length > 0 ? style : null;
+      },
     }),
-    [],
+    [isWorkflowReadonly],
   );
 
   const gridOptions = useMemo<GridOptions<GridRow>>(
@@ -1249,16 +1668,46 @@ export function ReportGrid({
       suppressCellFocus: false,
       suppressDragLeaveHidesColumns: true,
       suppressMaintainUnsortedOrder: false,
+      suppressColumnVirtualisation: false,
       suppressScrollOnNewData: true,
       rowBuffer: 24,
       getRowStyle: (params) => {
         if (params.data?.__rowKind === "section") {
           const sectionStyle: RowStyle = {
-            background: "color-mix(in oklch, var(--secondary) 74%, transparent)",
-            color: "var(--muted-foreground)",
-            fontWeight: "600",
+            background: "color-mix(in oklch, var(--secondary) 86%, transparent)",
+            borderBottom: "1px solid var(--border)",
+            borderTop: "1px solid var(--border)",
+            color: "var(--foreground)",
+            fontWeight: "700",
           };
           return sectionStyle;
+        }
+
+        if (params.data?.__rowRole === "summary") {
+          const summaryStyle: RowStyle = {
+            background: "color-mix(in oklch, var(--muted) 68%, transparent)",
+            color: "var(--foreground)",
+            fontWeight: "700",
+          };
+          return summaryStyle;
+        }
+
+        if (params.data?.__rowRole === "calculated") {
+          const calculatedStyle: RowStyle = {
+            background: "color-mix(in oklch, var(--secondary) 48%, transparent)",
+            color: "var(--foreground)",
+            fontWeight: "600",
+          };
+          return calculatedStyle;
+        }
+
+        if (params.data?.__rowRole === "readonly") {
+          const readonlyStyle: RowStyle = {
+            background: "color-mix(in oklch, var(--muted) 36%, transparent)",
+            color: "var(--muted-foreground)",
+            fontWeight: "500",
+          };
+          return readonlyStyle;
         }
 
         if (params.data?.__dirty) {
@@ -1268,6 +1717,13 @@ export function ReportGrid({
           return dirtyStyle;
         }
 
+        if (params.data?.__templateRow && params.data.__visualLevel === 2) {
+          const childTemplateStyle: RowStyle = {
+            background: "color-mix(in oklch, var(--background) 78%, var(--muted))",
+          };
+          return childTemplateStyle;
+        }
+
         return undefined;
       },
     }),
@@ -1275,6 +1731,9 @@ export function ReportGrid({
   );
 
   const deleteRow = useCallback((rowId: string) => {
+    if (!window.confirm("Delete this row? The row and its metric values will be removed when you save.")) {
+      return;
+    }
     dispatch({ type: "delete_row", rowId });
   }, []);
 
@@ -1308,6 +1767,7 @@ export function ReportGrid({
         pinned: "left",
         width: 86,
         minWidth: 86,
+        lockPinned: true,
         sortable: false,
         valueFormatter: (params) => {
           if (!params.data) {
@@ -1329,29 +1789,72 @@ export function ReportGrid({
         pinned: "left",
         width: 62,
         minWidth: 62,
+        lockPinned: true,
         sortable: false,
-        valueGetter: (params) => (typeof params.node?.rowIndex === "number" ? params.node.rowIndex + 1 : ""),
+        valueGetter: (params) => {
+          if (params.data?.__rowKind === "section") {
+            return "";
+          }
+          return params.data?.source_row_number ?? (
+            typeof params.node?.rowIndex === "number" ? params.node.rowIndex + 1 : ""
+          );
+        },
       },
       {
         field: "row_label",
         headerName: baseColumnConfig.get("row_label")?.headerName ?? "Row",
+        editable: (params) => Boolean(params.data && !isWorkflowReadonly && isEditableDataRow(params.data)),
         pinned: "left",
+        lockPinned: true,
         minWidth: baseColumnConfig.get("row_label")?.minWidth ?? 190,
+        cellRenderer: (params: ICellRendererParams<GridRow>) => {
+          if (params.data?.__rowKind !== "section") {
+            return params.value ?? "";
+          }
+
+          const sectionId = params.data.__sectionId;
+          const isCollapsed = sectionId ? state.collapsedSectionIds.has(sectionId) : false;
+          const Icon = isCollapsed ? ChevronRight : ChevronDown;
+
+          return (
+            <button
+              className="flex h-full w-full items-center gap-2 text-left font-semibold"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (sectionId) {
+                  dispatch({ type: "toggle_section", sectionId });
+                }
+              }}
+              type="button"
+            >
+              <Icon className="size-4 text-muted-foreground" />
+              <span className="truncate">{params.value ?? ""}</span>
+            </button>
+          );
+        },
       },
       {
         field: "row_group",
         headerName: baseColumnConfig.get("row_group")?.headerName ?? "Group",
+        editable: (params) =>
+          Boolean(params.data && !isWorkflowReadonly && isEditableDataRow(params.data) && !params.data.__templateRow),
+        pinned: "left",
+        lockPinned: true,
         minWidth: baseColumnConfig.get("row_group")?.minWidth ?? 140,
       },
       {
         field: "row_key",
         headerName: baseColumnConfig.get("row_key")?.headerName ?? "Key",
+        editable: (params) =>
+          Boolean(params.data && !isWorkflowReadonly && isEditableDataRow(params.data) && !params.data.__templateRow),
+        pinned: "left",
+        lockPinned: true,
         minWidth: baseColumnConfig.get("row_key")?.minWidth ?? 140,
       },
       ...state.metricColumns.map<ColDef<GridRow>>((column) => ({
         field: column.field,
         colId: column.field,
-        editable: (params) => Boolean(params.data && isEditableDataRow(params.data) && !column.readonly),
+        editable: (params) => Boolean(params.data && !isWorkflowReadonly && isEditableDataRow(params.data) && !column.readonly),
         headerName: column.unitOfMeasure ? `${column.label} (${column.unitOfMeasure})` : column.label,
         minWidth: 150,
         type: column.valueType === "number" ? "rightAligned" : undefined,
@@ -1364,39 +1867,57 @@ export function ReportGrid({
         width: 94,
         minWidth: 94,
         sortable: false,
-        cellRenderer: (params: ICellRendererParams<GridRow>) => (
-          <div className="flex items-center gap-1">
-            <button
-              aria-label="Duplicate row"
-              className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-secondary hover:text-foreground"
-              onClick={(event) => {
-                event.stopPropagation();
-                if (params.data) {
-                  duplicateRow(params.data.id);
-                }
-              }}
-              type="button"
-            >
-              <Copy size={15} />
-            </button>
-            <button
-              aria-label="Delete row"
-              className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-secondary hover:text-destructive"
-              onClick={(event) => {
-                event.stopPropagation();
-                if (params.data) {
-                  deleteRow(params.data.id);
-                }
-              }}
-              type="button"
-            >
-              <Trash2 size={15} />
-            </button>
-          </div>
-        ),
+        cellRenderer: (params: ICellRendererParams<GridRow>) => {
+          const canEditRow = Boolean(params.data && !isWorkflowReadonly && isEditableDataRow(params.data));
+
+          return (
+            <div className="flex items-center gap-1">
+              <button
+                aria-label="Duplicate row"
+                className={`inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-secondary hover:text-foreground ${
+                  canEditRow ? "" : "cursor-not-allowed opacity-40"
+                }`}
+                disabled={!canEditRow}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (params.data) {
+                    duplicateRow(params.data.id);
+                  }
+                }}
+                type="button"
+              >
+                <Copy size={15} />
+              </button>
+              <button
+                aria-label="Delete row"
+                className={`inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-secondary hover:text-destructive ${
+                  canEditRow ? "" : "cursor-not-allowed opacity-40"
+                }`}
+                disabled={!canEditRow}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (params.data) {
+                    deleteRow(params.data.id);
+                  }
+                }}
+                type="button"
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          );
+        },
       },
     ],
-    [baseColumnConfig, deleteRow, duplicateRow, state.metricColumns, state.selectedRowId],
+    [
+      baseColumnConfig,
+      deleteRow,
+      duplicateRow,
+      isWorkflowReadonly,
+      state.collapsedSectionIds,
+      state.metricColumns,
+      state.selectedRowId,
+    ],
   );
 
   const getRowId = useCallback((params: GetRowIdParams<GridRow>) => params.data.id, []);
@@ -1415,6 +1936,10 @@ export function ReportGrid({
   }, []);
 
   const onRowClicked = useCallback((event: RowClickedEvent<GridRow>) => {
+    if (event.data?.__rowKind === "section" && event.data.__sectionId) {
+      dispatch({ type: "toggle_section", sectionId: event.data.__sectionId });
+      return;
+    }
     dispatch({ type: "select_row", rowId: event.data?.id ?? null });
   }, []);
 
@@ -1429,7 +1954,7 @@ export function ReportGrid({
   const totalMetricCount = editableRowCount * state.metricColumns.length + reportMetricCount;
 
   async function handleSave() {
-    if (!report || !hasUnsavedChanges) {
+    if (!report || !hasUnsavedChanges || isWorkflowReadonly) {
       return;
     }
 
@@ -1439,6 +1964,7 @@ export function ReportGrid({
       return;
     }
 
+    captureGridViewport();
     dispatch({ type: "saving" });
 
     try {
@@ -1468,8 +1994,11 @@ export function ReportGrid({
             __created: false,
             __readonly: false,
             __rowKind: "data",
+            __rowRole: "editable",
+            __visualLevel: 1,
             __sectionId: null,
             __templateRow: false,
+            __dirtyFields: {},
             __metricMeta: {
               report_metric: {
                 key: metric.metric_key,
@@ -1539,6 +2068,11 @@ export function ReportGrid({
             <span className="rounded-md border bg-background/70 px-3 py-2 text-sm text-muted-foreground">
               {editableRowCount} rows / {totalMetricCount} metrics
             </span>
+            {report.status && (
+              <span className="rounded-md border bg-background/70 px-3 py-2 text-sm font-medium">
+                {workflowStatusLabels[report.status]}
+              </span>
+            )}
             <span
               className={`rounded-md border px-3 py-2 text-sm ${
                 hasUnsavedChanges
@@ -1549,28 +2083,61 @@ export function ReportGrid({
               {dirtyCount} dirty / {state.createdRowIds.size} new / {state.updatedRowIds.size} updated / {state.deletedRowIds.size} deleted
             </span>
             <Button
-              onClick={() => dispatch({ type: "reset_changes" })}
+              onClick={() => {
+                if (window.confirm("Discard all unsaved grid changes?")) {
+                  dispatch({ type: "reset_changes" });
+                }
+              }}
               disabled={!hasUnsavedChanges || state.isSaving}
               variant="outline"
             >
               <RotateCcw size={16} />
               Reset
             </Button>
-            <Button onClick={handleSave} disabled={state.isSaving || !hasUnsavedChanges}>
+            <Button onClick={handleSave} disabled={state.isSaving || !hasUnsavedChanges || isWorkflowReadonly}>
               {state.isSaving ? <Loader2 className="size-4 animate-spin" /> : <Save size={16} />}
               {state.isSaving ? "Saving" : "Save"}
             </Button>
+            {workflowActionsByStatus[report.status].map((action) => (
+              <Button
+                disabled={isWorkflowTransitioning || hasUnsavedChanges}
+                key={action}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `${workflowActionLabels[action]} this report? Unsaved grid changes must be saved or reset first.`,
+                    )
+                  ) {
+                    void onWorkflowAction?.(action);
+                  }
+                }}
+                variant={action === "approve" ? "default" : "outline"}
+              >
+                {isWorkflowTransitioning ? <Loader2 className="size-4 animate-spin" /> : null}
+                {workflowActionLabels[action]}
+              </Button>
+            ))}
           </div>
         </div>
 
+        {isWorkflowReadonly && (
+          <div className="rounded-md border bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
+            This report is {workflowStatusLabels[report.status].toLowerCase()} and is open in read-only workflow mode.
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => dispatch({ type: "add_row", position: "end" })} variant="outline">
+          <Button
+            disabled={isWorkflowReadonly}
+            onClick={() => dispatch({ type: "add_row", position: "end" })}
+            variant="outline"
+          >
             <Plus size={16} />
             Add row
           </Button>
           <Button
             onClick={() => dispatch({ type: "add_row", position: "above" })}
-            disabled={!state.selectedRowId}
+            disabled={!state.selectedRowId || isWorkflowReadonly}
             variant="outline"
           >
             <ChevronsUpDown size={16} />
@@ -1578,7 +2145,7 @@ export function ReportGrid({
           </Button>
           <Button
             onClick={() => dispatch({ type: "add_row", position: "below" })}
-            disabled={!state.selectedRowId}
+            disabled={!state.selectedRowId || isWorkflowReadonly}
             variant="outline"
           >
             <ChevronsDownUp size={16} />
@@ -1586,19 +2153,51 @@ export function ReportGrid({
           </Button>
           <Button
             onClick={() => state.selectedRowId && dispatch({ type: "duplicate_row", rowId: state.selectedRowId })}
-            disabled={!selectedRowCanEdit}
+            disabled={!selectedRowCanEdit || isWorkflowReadonly}
             variant="outline"
           >
             <Copy size={16} />
             Duplicate
           </Button>
           <Button
-            onClick={() => state.selectedRowId && dispatch({ type: "delete_row", rowId: state.selectedRowId })}
-            disabled={!selectedRowCanEdit}
+            onClick={() => state.selectedRowId && deleteRow(state.selectedRowId)}
+            disabled={!selectedRowCanEdit || isWorkflowReadonly}
             variant="outline"
           >
             <Trash2 size={16} />
             Delete row
+          </Button>
+          <Button
+            onClick={() => dispatch({ type: "undo_structure" })}
+            disabled={state.historyPast.length === 0 || state.isSaving || isWorkflowReadonly}
+            variant="outline"
+          >
+            <Undo2 size={16} />
+            Undo
+          </Button>
+          <Button
+            onClick={() => dispatch({ type: "redo_structure" })}
+            disabled={state.historyFuture.length === 0 || state.isSaving || isWorkflowReadonly}
+            variant="outline"
+          >
+            <Redo2 size={16} />
+            Redo
+          </Button>
+          <Button
+            onClick={() => dispatch({ type: "collapse_all_sections" })}
+            disabled={state.rows.every((row) => row.__rowKind !== "section")}
+            variant="outline"
+          >
+            <ChevronRight size={16} />
+            Collapse
+          </Button>
+          <Button
+            onClick={() => dispatch({ type: "expand_all_sections" })}
+            disabled={state.collapsedSectionIds.size === 0}
+            variant="outline"
+          >
+            <ChevronDown size={16} />
+            Expand
           </Button>
         </div>
 
@@ -1617,18 +2216,21 @@ export function ReportGrid({
           </select>
           <input
             className="h-10 rounded-md border bg-background/70 px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            disabled={isWorkflowReadonly}
             onChange={(event) => dispatch({ type: "edit_metric_draft", field: "key", value: event.target.value })}
             placeholder="Metric key"
             value={state.metricDraft.key}
           />
           <input
             className="h-10 rounded-md border bg-background/70 px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            disabled={isWorkflowReadonly}
             onChange={(event) => dispatch({ type: "edit_metric_draft", field: "label", value: event.target.value })}
             placeholder="Metric label"
             value={state.metricDraft.label}
           />
           <select
             className="h-10 rounded-md border bg-background/70 px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            disabled={isWorkflowReadonly}
             value={state.metricDraft.valueType}
             onChange={(event) =>
               dispatch({
@@ -1645,18 +2247,32 @@ export function ReportGrid({
           </select>
           <input
             className="h-10 rounded-md border bg-background/70 px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            disabled={isWorkflowReadonly}
             onChange={(event) =>
               dispatch({ type: "edit_metric_draft", field: "unitOfMeasure", value: event.target.value })
             }
             placeholder="Unit"
             value={state.metricDraft.unitOfMeasure}
           />
-          <Button onClick={() => dispatch({ type: "upsert_metric" })} variant="outline">
+          <Button disabled={isWorkflowReadonly} onClick={() => dispatch({ type: "upsert_metric" })} variant="outline">
             {selectedMetricColumn ? "Update" : "Add"} metric
           </Button>
           <Button
-            onClick={() => state.selectedMetricField && dispatch({ type: "delete_metric", field: state.selectedMetricField })}
-            disabled={!state.selectedMetricField}
+            onClick={() => {
+              if (!state.selectedMetricField || !selectedMetricColumn) {
+                return;
+              }
+
+              const affectedRows = dataRows(state.rows).length;
+              const typedKey = window.prompt(
+                `Delete metric "${selectedMetricColumn.label}" from ${affectedRows} rows? Type ${selectedMetricColumn.key} to confirm.`,
+              );
+
+              if (typedKey === selectedMetricColumn.key) {
+                dispatch({ type: "delete_metric", field: state.selectedMetricField });
+              }
+            }}
+            disabled={!state.selectedMetricField || isWorkflowReadonly}
             variant="outline"
           >
             <Trash2 size={16} />
@@ -1693,7 +2309,8 @@ export function ReportGrid({
           onRowClicked={onRowClicked}
           pinnedTopRowData={state.pinnedTopRows}
           reactiveCustomComponents
-          rowData={state.rows}
+          rowData={visibleRows}
+          theme="legacy"
         />
       </div>
     </section>
