@@ -23,8 +23,8 @@ const navigation = [
     roles: ["admin", "editor", "viewer"],
   },
   {
-    label: "Quality Review",
-    href: "/reports/schema-test",
+    label: "Report Grid",
+    href: "/reports/grid",
     icon: ClipboardCheck,
     roles: ["admin", "editor", "viewer"],
   },

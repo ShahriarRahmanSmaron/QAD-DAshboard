@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import UUID
 
 from sqlalchemy import Select, func, or_, select, true
@@ -96,6 +97,30 @@ async def get_writable_report(
             Report.deleted_at.is_(None),
             _report_write_filter(user),
         )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_writable_report_by_natural_key(
+    session: AsyncSession,
+    *,
+    report_type_id: UUID,
+    buyer_id: UUID,
+    unit_id: UUID,
+    report_date: date,
+    user: AuthUser,
+) -> Report | None:
+    result = await session.execute(
+        select(Report)
+        .where(
+            Report.report_type_id == report_type_id,
+            Report.buyer_id == buyer_id,
+            Report.unit_id == unit_id,
+            Report.report_date == report_date,
+            Report.deleted_at.is_(None),
+            _report_write_filter(user),
+        )
+        .options(*report_detail_options())
     )
     return result.scalar_one_or_none()
 

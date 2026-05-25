@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -354,31 +355,61 @@ async def bulk_save_report(
             detail="Invalid unit.",
         )
 
-    # Create report
-    report = Report(
+    report = await repository.get_writable_report_by_natural_key(
+        session,
         report_type_id=payload.report_type_id,
         buyer_id=payload.buyer_id,
         unit_id=payload.unit_id,
-        owner_user_id=actor.id,
         report_date=payload.report_date,
-        period_start=payload.period_start,
-        period_end=payload.period_end,
-        status=ReportStatus.DRAFT.value,
-        title=payload.title,
-        remarks=payload.remarks,
-        metadata_=_metadata(payload.metadata),
-        created_by_user_id=actor.id,
-        updated_by_user_id=actor.id,
+        user=actor,
     )
-    session.add(report)
+    is_update = report is not None
 
-    try:
+    if report is None:
+        report = Report(
+            report_type_id=payload.report_type_id,
+            buyer_id=payload.buyer_id,
+            unit_id=payload.unit_id,
+            owner_user_id=actor.id,
+            report_date=payload.report_date,
+            period_start=payload.period_start,
+            period_end=payload.period_end,
+            status=ReportStatus.DRAFT.value,
+            title=payload.title,
+            remarks=payload.remarks,
+            metadata_=_metadata(payload.metadata),
+            created_by_user_id=actor.id,
+            updated_by_user_id=actor.id,
+        )
+        session.add(report)
+
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An active report already exists for this type, buyer, unit, and date.",
+            ) from exc
+    else:
+        deleted_at = datetime.now(timezone.utc)
+        for metric in report.metrics:
+            if metric.deleted_at is None:
+                metric.deleted_at = deleted_at
+                metric.deleted_by_user_id = actor.id
+                metric.updated_by_user_id = actor.id
+        for row in report.rows:
+            if row.deleted_at is None:
+                row.deleted_at = deleted_at
+                row.deleted_by_user_id = actor.id
+                row.updated_by_user_id = actor.id
+
+        report.period_start = payload.period_start
+        report.period_end = payload.period_end
+        report.title = payload.title
+        report.remarks = payload.remarks
+        report.metadata_ = _metadata(payload.metadata)
+        report.updated_by_user_id = actor.id
         await session.flush()
-    except IntegrityError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="An active report already exists for this type, buyer, unit, and date.",
-        ) from exc
 
     # Bulk-insert rows and their nested metrics
     all_rows: list[ReportRow] = []
@@ -469,13 +500,14 @@ async def bulk_save_report(
     add_audit_log(
         session,
         actor=actor,
-        action="report.bulk_saved",
+        action="report.bulk_saved" if not is_update else "report.bulk_replaced",
         target_type="report",
         target_id=report.id,
         metadata={
             "report_date": payload.report_date.isoformat(),
             "row_count": len(all_rows),
             "metric_count": len(all_metrics),
+            "mode": "update" if is_update else "create",
         },
     )
     await session.flush()
