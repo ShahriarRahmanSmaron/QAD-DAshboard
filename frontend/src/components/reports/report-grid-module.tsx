@@ -5,6 +5,7 @@ import { RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ReportGrid } from "@/components/reports/report-grid";
 import { Button } from "@/components/ui/button";
+import { resolveReportTemplate, validateReportTemplates } from "@/features/reports/templates";
 import { getReport, listReportSummaries } from "@/lib/reports/api";
 import type { Report, ReportSummary } from "@/lib/reports/types";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,7 @@ function reportTitle(report: ReportSummary) {
 export function ReportGridModule() {
   const queryClient = useQueryClient();
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const summariesQuery = useQuery({
     queryKey: ["reports", "summaries", 1, 50],
@@ -41,11 +43,29 @@ export function ReportGridModule() {
     enabled: Boolean(selectedReportId),
     staleTime: 10_000,
   });
+  const selectedTemplate = useMemo(
+    () => resolveReportTemplate(reportQuery.data ?? null),
+    [reportQuery.data],
+  );
+  const templateErrors = useMemo(() => validateReportTemplates(), []);
 
   function handleSaved(report: Report) {
+    setHasUnsavedChanges(false);
     setSelectedReportId(report.id);
     void queryClient.invalidateQueries({ queryKey: ["reports", "summaries"] });
     queryClient.setQueryData(["reports", "detail", report.id], report);
+  }
+
+  function handleSelectReport(reportId: string) {
+    if (
+      hasUnsavedChanges &&
+      !window.confirm("Discard unsaved grid changes and open another report?")
+    ) {
+      return;
+    }
+
+    setHasUnsavedChanges(false);
+    setSelectedReportId(reportId);
   }
 
   return (
@@ -85,7 +105,7 @@ export function ReportGridModule() {
                     selectedReportId === report.id && "bg-secondary text-foreground",
                   )}
                   key={report.id}
-                  onClick={() => setSelectedReportId(report.id)}
+                  onClick={() => handleSelectReport(report.id)}
                   type="button"
                 >
                   <span className="block truncate font-medium">{reportTitle(report)}</span>
@@ -104,8 +124,10 @@ export function ReportGridModule() {
 
       <ReportGrid
         isLoading={reportQuery.isFetching}
+        onDirtyChange={setHasUnsavedChanges}
         onSaved={handleSaved}
         report={reportQuery.data ?? null}
+        template={templateErrors.length > 0 ? null : selectedTemplate}
       />
     </div>
   );
