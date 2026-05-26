@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     supabase_url: AnyUrl | None = None
     supabase_anon_key: str | None = None
     supabase_service_role_key: str | None = None
+    uploaded_workbook_storage_dir: str = "storage/uploads/workbooks"
     cors_origins_raw: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
     slow_request_threshold_ms: float = 500.0
     slow_query_threshold_ms: float = 250.0

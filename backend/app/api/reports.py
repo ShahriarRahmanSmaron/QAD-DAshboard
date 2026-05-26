@@ -1,7 +1,8 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.constants import Permission, UserRole
@@ -19,6 +20,8 @@ from app.reporting.schemas import (
     ReportRowCreateRequest,
     ReportRowResponse,
     ReportSummaryListResponse,
+    WorkbookExportRequest,
+    WorkbookUploadResponse,
 )
 from app.reporting.service import (
     bulk_save_report,
@@ -31,6 +34,8 @@ from app.reporting.service import (
     serialize_row,
     transition_report_workflow,
 )
+from app.reporting.workbook_export import export_workbook_for_user
+from app.reporting.workbook_service import save_and_parse_workbook_upload
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
@@ -162,6 +167,82 @@ async def transition_report(
     if loaded is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
     return serialize_report(loaded)
+
+
+@router.post(
+    "/workbooks/upload",
+    response_model=WorkbookUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_workbook(
+    session: SessionDep,
+    user: ReportWriterDep,
+    file: Annotated[UploadFile, File(...)],
+) -> WorkbookUploadResponse:
+    try:
+        response = await save_and_parse_workbook_upload(session, file=file, actor=user)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+    return response
+
+
+@router.post(
+    "/workbooks/{uploaded_file_id}/export",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Reconstructed XLSX workbook with edits applied.",
+            "content": {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}
+            },
+        }
+    },
+)
+async def export_workbook(
+    uploaded_file_id: UUID,
+    payload: WorkbookExportRequest,
+    session: SessionDep,
+    user: ReportWriterDep,
+) -> Response:
+    """Reopen an uploaded XLSX, patch operational edits, and stream it back.
+
+    The workbook is rebuilt by *loading the original file* with openpyxl and
+    only mutating the cells the user actually edited. This preserves merged
+    regions, freeze panes, hidden rows/columns, row/column dimensions,
+    grouping, and styles to the extent openpyxl retains them.
+    """
+
+    try:
+        binary, download_filename, summary = await export_workbook_for_user(
+            session,
+            uploaded_file_id=uploaded_file_id,
+            edits=payload.sheet_edits,
+            actor=user,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+    safe_summary_header = (
+        f'applied={summary["applied_total"]}; '
+        f'skipped={summary["skipped_total"]}; '
+        f'bytes={summary["bytes_written"]}'
+    )
+    headers = {
+        "Content-Disposition": f'attachment; filename="{download_filename}"',
+        "X-Workbook-Export-Summary": safe_summary_header,
+        "X-Workbook-Source-Filename": download_filename,
+        "Cache-Control": "no-store",
+    }
+    return Response(
+        content=binary,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
 
 
 @router.post(

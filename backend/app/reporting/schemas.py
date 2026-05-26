@@ -180,6 +180,101 @@ class ReportWorkflowTransitionResponse(BaseModel):
     report: ReportResponse
 
 
+class WorkbookCellPreview(BaseModel):
+    address: str
+    row: int
+    column: int
+    value: str | int | float | bool | None
+    formula: str | None
+    data_type: str
+    style: JsonObject
+
+
+class WorkbookRegionPreview(BaseModel):
+    id: str
+    label: str
+    kind: str
+    range: str
+    start_row: int
+    end_row: int
+    start_column: int
+    end_column: int
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class WorkbookSheetStructure(BaseModel):
+    merged_cells: list[str]
+    row_heights: dict[str, float]
+    column_widths: dict[str, float]
+    hidden_rows: list[int]
+    hidden_columns: list[str]
+    freeze_panes: str | None
+    row_groups: dict[str, int]
+    column_groups: dict[str, int]
+    sheet_state: str
+
+
+class WorkbookSheetView(BaseModel):
+    freeze_panes: JsonObject
+    grid_lines: bool | None
+    zoom_scale: int | None
+
+
+class WorkbookSheetPreview(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    index: int
+    dimension: str
+    max_row: int
+    max_column: int
+    non_empty_cell_count: int
+    formula_count: int
+    structure: WorkbookSheetStructure
+    workbook_view: WorkbookSheetView
+    regions: list[WorkbookRegionPreview]
+    cells: list[WorkbookCellPreview]
+    sync: JsonObject
+
+
+class WorkbookParsePreview(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    filename: str
+    sheet_count: int
+    parser: str
+    preview_limits: JsonObject
+    workbook_sync: JsonObject
+    sheets: list[WorkbookSheetPreview]
+    degraded_sheets: list[str] = Field(default_factory=list)
+
+
+class WorkbookUploadResponse(BaseModel):
+    uploaded_file_id: UUID
+    original_filename: str
+    file_size_bytes: int
+    metadata: WorkbookParsePreview
+
+
+# ---------------------------------------------------------------------------
+# Workbook export (MD06-5)
+# ---------------------------------------------------------------------------
+
+
+class WorkbookExportRequest(BaseModel):
+    """Request body for the workbook export endpoint.
+
+    ``sheet_edits`` is a mapping from sheet name to an address->value map.
+    Addresses use Excel A1 notation (``B12``). Values may be strings, numbers,
+    booleans, or null. The backend coerces ISO date strings and numeric
+    strings on its end.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    sheet_edits: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Bulk save request: full report tree in one call
 # ---------------------------------------------------------------------------

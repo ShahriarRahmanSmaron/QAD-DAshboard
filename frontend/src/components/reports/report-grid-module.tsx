@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, RefreshCw, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { ReportGrid } from "@/components/reports/report-grid";
+import { WorkbookUploadPanel } from "@/components/reports/workbook-upload-panel";
 import { Button } from "@/components/ui/button";
 import {
   reportTemplates,
@@ -639,15 +640,18 @@ export function ReportGridModule() {
         </div>
       </aside>
 
-      <ReportGrid
-        isWorkflowTransitioning={isWorkflowTransitioning}
-        isLoading={reportQuery.isFetching}
-        onDirtyChange={setHasUnsavedChanges}
-        onSaved={handleSaved}
-        onWorkflowAction={handleWorkflowAction}
-        report={reportQuery.data ?? null}
-        template={templateErrors.length > 0 ? null : selectedTemplate}
-      />
+      <div className="min-w-0 space-y-4">
+        <WorkbookUploadPanel />
+        <ReportGrid
+          isWorkflowTransitioning={isWorkflowTransitioning}
+          isLoading={reportQuery.isFetching}
+          onDirtyChange={setHasUnsavedChanges}
+          onSaved={handleSaved}
+          onWorkflowAction={handleWorkflowAction}
+          report={reportQuery.data ?? null}
+          template={templateErrors.length > 0 ? null : selectedTemplate}
+        />
+      </div>
     </div>
   );
 }

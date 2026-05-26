@@ -226,3 +226,161 @@ export type UnitListResponse = {
 export type ReportTypeListResponse = {
   report_types: ReportTypeOption[];
 };
+
+export type WorkbookCellPreview = {
+  address: string;
+  row: number;
+  column: number;
+  value: string | number | boolean | null;
+  formula: string | null;
+  data_type: string;
+  style: Record<string, unknown>;
+};
+
+export type WorkbookRegionPreview = {
+  id: string;
+  label: string;
+  kind: string;
+  range: string;
+  start_row: number;
+  end_row: number;
+  start_column: number;
+  end_column: number;
+  metadata: Record<string, unknown>;
+};
+
+export type WorkbookSyncRegion = {
+  id: string;
+  kind: string;
+  range: string;
+  start_row: number;
+  end_row: number;
+  start_column: number;
+  end_column: number;
+};
+
+export type WorkbookSyncMergedRegion = {
+  range: string;
+  master: string;
+  start_row: number;
+  end_row: number;
+  start_column: number;
+  end_column: number;
+  span: {
+    rows: number;
+    columns: number;
+  };
+};
+
+export type WorkbookSyncRow = {
+  workbook_row: number;
+  grid_row_id: string;
+  role: "editable" | "readonly" | "structural";
+  editable: boolean;
+  hidden: boolean;
+  height: number | null;
+  outline_level: number;
+  region_ids: string[];
+};
+
+export type WorkbookSyncColumn = {
+  workbook_column: number;
+  workbook_column_name: string;
+  grid_field: string;
+  width: number | null;
+  hidden: boolean;
+  outline_level: number;
+  frozen: boolean;
+};
+
+export type WorkbookSyncCell = {
+  address: string;
+  workbook_row: number;
+  workbook_column: number;
+  grid_row_id: string;
+  grid_field: string;
+  region_ids: string[];
+  editable: boolean;
+  readonly_reason: string | null;
+  has_formula: boolean;
+  merge: {
+    role: "master" | "covered";
+    master: string;
+    range: string;
+    span: {
+      rows: number;
+      columns: number;
+    };
+  } | null;
+};
+
+export type WorkbookSheetSync = {
+  version: number;
+  grid_engine: string;
+  sheet_name: string;
+  layout_fingerprint: string;
+  preview_limits: {
+    max_rows: number;
+    max_columns: number;
+  };
+  geometry: Record<string, unknown>;
+  regions: {
+    editable: WorkbookSyncRegion[];
+    readonly: WorkbookSyncRegion[];
+    structural: WorkbookSyncRegion[];
+    merged: WorkbookSyncMergedRegion[];
+  };
+  rows: WorkbookSyncRow[];
+  columns: WorkbookSyncColumn[];
+  cells: WorkbookSyncCell[];
+  degraded?: boolean;
+  degraded_reason?: string | null;
+};
+
+export type WorkbookSheetPreview = {
+  name: string;
+  index: number;
+  dimension: string;
+  max_row: number;
+  max_column: number;
+  non_empty_cell_count: number;
+  formula_count: number;
+  structure: {
+    merged_cells: string[];
+    row_heights: Record<string, number>;
+    column_widths: Record<string, number>;
+    hidden_rows: number[];
+    hidden_columns: string[];
+    freeze_panes: string | null;
+    row_groups: Record<string, number>;
+    column_groups: Record<string, number>;
+    sheet_state: string;
+  };
+  workbook_view: {
+    freeze_panes: Record<string, unknown>;
+    grid_lines: boolean | null;
+    zoom_scale: number | null;
+  };
+  regions: WorkbookRegionPreview[];
+  cells: WorkbookCellPreview[];
+  sync: WorkbookSheetSync;
+  degraded?: boolean;
+  degraded_reason?: string | null;
+};
+
+export type WorkbookParsePreview = {
+  filename: string;
+  sheet_count: number;
+  parser: string;
+  preview_limits: Record<string, unknown>;
+  workbook_sync: Record<string, unknown>;
+  sheets: WorkbookSheetPreview[];
+  degraded_sheets?: string[];
+};
+
+export type WorkbookUploadResponse = {
+  uploaded_file_id: string;
+  original_filename: string;
+  file_size_bytes: number;
+  metadata: WorkbookParsePreview;
+};

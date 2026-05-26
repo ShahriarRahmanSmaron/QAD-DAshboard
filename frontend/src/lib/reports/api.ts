@@ -12,6 +12,7 @@ import type {
   ReportWorkflowAction,
   ReportTypeListResponse,
   UnitListResponse,
+  WorkbookUploadResponse,
 } from "@/lib/reports/types";
 
 type ApiErrorBody = {
@@ -111,4 +112,125 @@ export function listUnits() {
 
 export function listReportTypes() {
   return request<ReportTypeListResponse>("/api/report-types");
+}
+
+export function uploadWorkbook(
+  file: File,
+  onProgress?: (progress: number) => void,
+): Promise<WorkbookUploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/reports/workbooks/upload");
+    xhr.responseType = "json";
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress?.(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      const response = xhr.response as WorkbookUploadResponse | ApiErrorBody | null;
+      if (xhr.status >= 200 && xhr.status < 300 && response) {
+        onProgress?.(100);
+        resolve(response as WorkbookUploadResponse);
+        return;
+      }
+
+      const errorBody = response as ApiErrorBody | null;
+      reject(new Error(errorBody?.detail ?? errorBody?.message ?? "Workbook upload failed."));
+    };
+
+    xhr.onerror = () => reject(new Error("Workbook upload failed."));
+    xhr.send(formData);
+  });
+}
+
+export type WorkbookExportPayload = {
+  sheet_edits: Record<string, Record<string, string | number | boolean | null>>;
+};
+
+export type WorkbookExportResult = {
+  blob: Blob;
+  filename: string;
+  summary: string | null;
+};
+
+const exportFilenameRegex = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i;
+
+function parseExportFilename(disposition: string | null, fallback: string) {
+  if (!disposition) {
+    return fallback;
+  }
+  const match = exportFilenameRegex.exec(disposition);
+  if (!match || !match[1]) {
+    return fallback;
+  }
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+/**
+ * Reconstruct an XLSX export with operational edits applied.
+ *
+ * Returns the binary ``Blob`` plus the suggested download filename. The
+ * caller decides how to present the download - either by triggering a
+ * browser save (see ``triggerWorkbookDownload``) or by reading the buffer
+ * for further processing.
+ */
+export async function exportWorkbook(
+  uploadedFileId: string,
+  payload: WorkbookExportPayload,
+): Promise<WorkbookExportResult> {
+  const response = await fetch(
+    `/api/reports/workbooks/${uploadedFileId}/export`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+
+  if (!response.ok) {
+    let message = "Workbook export failed.";
+    try {
+      const data = (await response.json()) as ApiErrorBody;
+      message = data.detail ?? data.message ?? message;
+    } catch {
+      message = `Workbook export failed with status ${response.status}.`;
+    }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const filename = parseExportFilename(
+    response.headers.get("Content-Disposition"),
+    "workbook-edited.xlsx",
+  );
+  const summary = response.headers.get("X-Workbook-Export-Summary");
+  return { blob, filename, summary };
+}
+
+/**
+ * Trigger a browser download for an exported workbook blob.
+ */
+export function triggerWorkbookDownload(blob: Blob, filename: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  // Defer revoke so the browser has time to start the download in all cases.
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
 }

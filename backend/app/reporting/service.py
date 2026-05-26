@@ -33,6 +33,26 @@ def _metadata(value: dict[str, Any]) -> dict[str, Any]:
     return dict(value)
 
 
+PERSISTENT_REPORT_METADATA_KEYS = (
+    "workbook_sync",
+    "workbook_source",
+    "workbook_geometry",
+    "workbook_layout",
+)
+
+
+def _merge_persistent_report_metadata(
+    *,
+    existing: dict[str, Any],
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    merged = _metadata(incoming)
+    for key in PERSISTENT_REPORT_METADATA_KEYS:
+        if key not in merged and key in existing:
+            merged[key] = existing[key]
+    return merged
+
+
 def serialize_metric(metric: ReportMetric) -> ReportMetricResponse:
     return ReportMetricResponse(
         id=metric.id,
@@ -480,7 +500,10 @@ async def bulk_save_report(
         report.period_end = payload.period_end
         report.title = payload.title
         report.remarks = payload.remarks
-        report.metadata_ = _metadata(payload.metadata)
+        report.metadata_ = _merge_persistent_report_metadata(
+            existing=report.metadata_,
+            incoming=payload.metadata,
+        )
         report.updated_by_user_id = actor.id
         await session.flush()
 
