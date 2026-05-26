@@ -227,3 +227,31 @@ body {
   background: color-mix(in oklch, var(--background) 88%, var(--muted));
   box-shadow: 0 1px 0 color-mix(in oklch, var(--border) 92%, transparent);
 }
+
+/* MD06-6A: Workbook reconstruction debug overlay.
+ *
+ * Toggling the "Show region overlay" button in the diagnostics panel adds the
+ * ``.workbook-reconstruction-debug-overlay`` modifier to the grid container.
+ * It paints a translucent outline around editable, readonly, and merged
+ * regions so reviewers can verify that the portal reconstruction matches the
+ * uploaded workbook geometry visually, without needing to inspect metadata.
+ */
+.workbook-reconstruction-debug-overlay .workbook-cell-editable {
+  outline: 1px dashed color-mix(in oklch, var(--primary) 65%, transparent);
+  outline-offset: -1px;
+}
+
+.workbook-reconstruction-debug-overlay .workbook-cell-readonly {
+  outline: 1px dashed color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  outline-offset: -1px;
+}
+
+.workbook-reconstruction-debug-overlay .workbook-cell-merge-master {
+  outline: 1px solid color-mix(in oklch, var(--primary) 70%, transparent);
+  outline-offset: -1px;
+}
+
+.workbook-reconstruction-debug-overlay .workbook-cell-merge-covered {
+  outline: 1px dotted color-mix(in oklch, var(--primary) 35%, transparent);
+  outline-offset: -1px;
+}

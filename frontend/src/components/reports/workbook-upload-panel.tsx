@@ -9,7 +9,7 @@ import {
   type RowStyle,
 } from "ag-grid-community";
 import { AnimatePresence, motion } from "framer-motion";
-import { Download, FileSpreadsheet, Loader2, Upload, X } from "lucide-react";
+import { Bug, Download, FileSpreadsheet, Loader2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -61,6 +61,24 @@ type WorkbookGridRow = {
 type WorkbookEditValue = string | number | boolean | null;
 type WorkbookSheetEditMap = Record<string, WorkbookEditValue>;
 type WorkbookMergeSpan = { range: string; rows: number; columns: number };
+
+type WorkbookSheetReconstructionStats = {
+  rendered: number;
+  skipped: number;
+  hiddenRows: number;
+  hiddenColumns: number;
+  mergedRegions: number;
+  orphanMasters: number;
+  oversizedRowsTrimmed: number;
+  oversizedColumnsTrimmed: number;
+  rowLimit: number;
+  columnLimit: number;
+};
+
+type WorkbookSheetGridResult = {
+  rows: WorkbookGridRow[];
+  stats: WorkbookSheetReconstructionStats;
+};
 
 type SafeSyncRegions = NonNullable<WorkbookSheetPreview["sync"]>["regions"];
 
@@ -339,6 +357,18 @@ function buildMergedLookup(sheet: WorkbookSheetPreview) {
       startColumn: region.start_column,
       endColumn: region.end_column,
     });
+    // AG Grid cannot reproduce vertical row spans natively. For
+    // vertical-only merges (single column, multiple rows) we still render
+    // the master text at its anchor row, but we do NOT mark the other
+    // rows' covered cells as "covered" - otherwise they'd be blanked with
+    // ``color: transparent`` and force every adjacent column on those
+    // rows to look obscured. The merge metadata stays in ``masters`` so
+    // the master cell can still surface its merge styling.
+    const isVerticalOnly =
+      region.span.columns === 1 && region.start_column === region.end_column;
+    if (isVerticalOnly) {
+      continue;
+    }
     for (let row = region.start_row; row <= region.end_row; row += 1) {
       for (let column = region.start_column; column <= region.end_column; column += 1) {
         const key = `${row}:${column}`;
@@ -388,7 +418,7 @@ function formatWorkbookCellValue(value: unknown) {
 function buildSheetGridRows(
   sheet: WorkbookSheetPreview,
   edits: WorkbookSheetEditMap,
-): WorkbookGridRow[] {
+): WorkbookSheetGridResult {
   const sheetCells = safeSheetCells(sheet);
   const cellMap = new Map(sheetCells.map((cell) => [`${cell.row}:${cell.column}`, cell]));
   const syncCellMap = new Map(
@@ -405,8 +435,53 @@ function buildSheetGridRows(
       ? sheet.structure.row_heights
       : ({} as Record<string, number>);
 
-  for (const syncRow of safeSyncRows(sheet).slice(0, maxSheetPreviewRows)) {
+  // Build a reverse lookup from anchor address -> master cell, used to surface
+  // orphan-master text into the first visible covered cell when the master
+  // row itself is hidden by Excel. Without this, operational header titles
+  // disappear from the portal even though the workbook still carries them.
+  const orphanMasterByVisibleKey = new Map<
+    string,
+    { masterAddress: string; range: string }
+  >();
+  for (const syncCell of safeSyncCells(sheet)) {
+    const orphan = syncCell.orphan_master;
+    if (!orphan || !orphan.master_address) {
+      continue;
+    }
+    orphanMasterByVisibleKey.set(
+      `${syncCell.workbook_row}:${syncCell.workbook_column}`,
+      {
+        masterAddress: orphan.master_address,
+        range: orphan.range ?? "",
+      },
+    );
+  }
+
+  // Stats collection
+  const totalSyncRows = safeSyncRows(sheet).length;
+  const visibleSyncRows = safeSyncRows(sheet).filter((row) => !row.hidden);
+  const hiddenRowCount = totalSyncRows - visibleSyncRows.length;
+  const hiddenColumnCount = safeSyncColumns(sheet).filter((column) => column.hidden).length;
+  const mergedRegionCount = safeSyncRegions(sheet).merged.length;
+  const orphanMasterCount = orphanMasterByVisibleKey.size;
+
+  // Filter hidden rows BEFORE slicing so a 120-row preview budget is spent on
+  // visible content rather than burned on hidden geometry.
+  const renderableSyncRows = visibleSyncRows.slice(0, maxSheetPreviewRows);
+  const oversizedRowsTrimmed = Math.max(
+    0,
+    visibleSyncRows.length - renderableSyncRows.length,
+  );
+  const totalSyncColumns = safeSyncColumns(sheet).filter((column) => !column.hidden).length;
+  const oversizedColumnsTrimmed = Math.max(
+    0,
+    totalSyncColumns - visibleColumns.length,
+  );
+  let skippedRowCount = 0;
+
+  for (const syncRow of renderableSyncRows) {
     if (syncRow.hidden) {
+      skippedRowCount += 1;
       continue;
     }
 
@@ -439,8 +514,27 @@ function buildSheetGridRows(
       const readonlyReason = syncCell?.readonly_reason ?? "";
       const isEditable = Boolean(syncCell?.editable);
       const cellRegionKind = regionKindForSyncCell(sheet, syncCell?.region_ids ?? []);
+      const orphan = orphanMasterByVisibleKey.get(key);
 
-      row[field] = isCovered ? "" : cellDisplayValue(cell, address, edits);
+      // Resolve the visible value for this cell. Covered cells normally
+      // render as blank, but if they are the first visible covered cell of
+      // an orphan merge we re-surface the master cell's text so the
+      // operational header survives the hidden anchor row.
+      let displayValue: WorkbookEditValue | string | number | boolean | null;
+      if (isCovered) {
+        if (orphan) {
+          // Read the master cell's value out of the parsed cell map.
+          const masterAddress = orphan.masterAddress;
+          const masterCell = sheetCells.find((candidate) => candidate.address === masterAddress);
+          displayValue = masterCell?.formula ?? masterCell?.value ?? "";
+        } else {
+          displayValue = "";
+        }
+      } else {
+        displayValue = cellDisplayValue(cell, address, edits);
+      }
+
+      row[field] = displayValue;
       row.__addresses[field] = address;
       row.__editableFields[field] = isEditable;
       row.__cellRegionKinds[field] = cellRegionKind ?? row.__regionKind ?? "";
@@ -461,13 +555,33 @@ function buildSheetGridRows(
       }
       if (isCovered) {
         row.__mergeCovered[field] = true;
-        row.__styles[field] = {
-          ...row.__styles[field],
-          color: "transparent",
+        // Orphan-rescued cells must remain readable - keep their text color
+        // intact and avoid the "transparent" overlay used for normal covered
+        // cells.
+        const isOrphanRescue = Boolean(orphan && displayValue !== "" && displayValue !== null);
+        const baseStyle = row.__styles[field] ?? {};
+        const overlayStyle: Record<string, string | number> = {
+          ...baseStyle,
+          color: isOrphanRescue ? baseStyle.color ?? "inherit" : "transparent",
           background:
-            row.__styles[field]?.background ??
-            "color-mix(in oklch, var(--muted) 42%, transparent)",
+            baseStyle.background ??
+            (isOrphanRescue
+              ? "color-mix(in oklch, var(--secondary) 76%, transparent)"
+              : "color-mix(in oklch, var(--muted) 42%, transparent)"),
         };
+        if (isOrphanRescue) {
+          overlayStyle.fontWeight = baseStyle.fontWeight ?? "650";
+        } else if (baseStyle.fontWeight !== undefined) {
+          overlayStyle.fontWeight = baseStyle.fontWeight;
+        }
+        row.__styles[field] = overlayStyle;
+        if (isOrphanRescue) {
+          row.__mergeSpans[field] = {
+            range: orphan?.range || address,
+            rows: 1,
+            columns: 1,
+          };
+        }
       }
       if (mergeMaster) {
         const visibleSpanColumns = visibleColumnNumbers.filter(
@@ -493,7 +607,21 @@ function buildSheetGridRows(
     rows.push(row);
   }
 
-  return rows;
+  return {
+    rows,
+    stats: {
+      rendered: rows.length,
+      skipped: skippedRowCount,
+      hiddenRows: hiddenRowCount,
+      hiddenColumns: hiddenColumnCount,
+      mergedRegions: mergedRegionCount,
+      orphanMasters: orphanMasterCount,
+      oversizedRowsTrimmed,
+      oversizedColumnsTrimmed,
+      rowLimit: maxSheetPreviewRows,
+      columnLimit: maxSheetPreviewColumns,
+    },
+  };
 }
 
 function workbookRowHeight(height: number | null | undefined, fallback?: number | null) {
@@ -521,6 +649,188 @@ function regionLabel(kind: string) {
     .join(" ");
 }
 
+type ReconstructionDiagnosticsPanelProps = {
+  sheet: WorkbookSheetPreview;
+  stats: WorkbookSheetReconstructionStats | null;
+  workbookDiagnostics:
+    | {
+        warnings?: { sheet?: string | null; code: string; message: string }[];
+        orphan_merged_masters?: number;
+        hidden_rows?: number;
+        hidden_columns?: number;
+        merged_regions?: number;
+        skipped_blank_rows?: number;
+        bands_built?: number;
+        debug_logging_enabled?: boolean;
+      }
+    | null;
+  showRegionOverlay: boolean;
+  onToggleRegionOverlay: () => void;
+};
+
+function ReconstructionDiagnosticsPanel({
+  sheet,
+  stats,
+  workbookDiagnostics,
+  showRegionOverlay,
+  onToggleRegionOverlay,
+}: ReconstructionDiagnosticsPanelProps) {
+  const sheetDiagnostics = sheet.reconstruction_diagnostics ?? null;
+  const renderedRows = stats?.rendered ?? 0;
+  const skippedRows = stats?.skipped ?? 0;
+  const hiddenRows =
+    stats?.hiddenRows ?? sheetDiagnostics?.hidden_row_count ?? sheet.structure.hidden_rows.length;
+  const hiddenColumns =
+    stats?.hiddenColumns ??
+    sheetDiagnostics?.hidden_column_count ??
+    sheet.structure.hidden_columns.length;
+  const mergedRegions =
+    stats?.mergedRegions ??
+    sheetDiagnostics?.merged_region_count ??
+    sheet.sync?.regions?.merged?.length ??
+    0;
+  const orphanMasters =
+    stats?.orphanMasters ??
+    (sheetDiagnostics?.orphan_merged_masters?.length ?? sheet.sync?.orphan_masters?.length ?? 0);
+  const oversizedRows = stats?.oversizedRowsTrimmed ?? 0;
+  const oversizedColumns = stats?.oversizedColumnsTrimmed ?? 0;
+  const sheetWarnings = sheetDiagnostics?.warnings ?? [];
+  const workbookWarnings = (workbookDiagnostics?.warnings ?? []).filter(
+    (warning) => warning.sheet && warning.sheet !== sheet.name,
+  );
+
+  const stats_entries: { label: string; value: number; tone?: "warning" | "info" }[] = [
+    { label: "Rendered rows", value: renderedRows, tone: "info" },
+    { label: "Skipped rows", value: skippedRows, tone: skippedRows ? "warning" : "info" },
+    { label: "Hidden rows", value: hiddenRows, tone: "info" },
+    { label: "Hidden columns", value: hiddenColumns, tone: "info" },
+    { label: "Merged regions", value: mergedRegions, tone: "info" },
+    {
+      label: "Orphan merged masters",
+      value: orphanMasters,
+      tone: orphanMasters ? "warning" : "info",
+    },
+    {
+      label: "Rows trimmed (preview cap)",
+      value: oversizedRows,
+      tone: oversizedRows ? "warning" : "info",
+    },
+    {
+      label: "Columns trimmed (preview cap)",
+      value: oversizedColumns,
+      tone: oversizedColumns ? "warning" : "info",
+    },
+  ];
+
+  return (
+    <div className="rounded-md border bg-background/55 p-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-foreground">
+            Reconstruction diagnostics — {sheet.name}
+          </div>
+          <div className="mt-0.5 text-muted-foreground">
+            Counts measured during AG Grid reconstruction. Warnings indicate
+            workbook geometry the portal could not visually reproduce.
+          </div>
+        </div>
+        <Button
+          aria-pressed={showRegionOverlay}
+          onClick={onToggleRegionOverlay}
+          type="button"
+          variant={showRegionOverlay ? "default" : "outline"}
+        >
+          {showRegionOverlay ? "Hide region overlay" : "Show region overlay"}
+        </Button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {stats_entries.map((entry) => (
+          <div
+            className={cn(
+              "rounded-md border bg-card/60 px-2 py-1.5",
+              entry.tone === "warning" &&
+                "border-amber-300/40 bg-amber-100/30 text-amber-900 dark:border-amber-400/30 dark:bg-amber-900/20 dark:text-amber-200",
+            )}
+            key={entry.label}
+          >
+            <div className="text-[11px] uppercase tracking-wide opacity-80">{entry.label}</div>
+            <div className="mt-0.5 text-base font-semibold tabular-nums">{entry.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {sheetDiagnostics?.orphan_merged_masters && sheetDiagnostics.orphan_merged_masters.length > 0 && (
+        <div className="mt-3 border-t pt-2">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Orphan merged masters (master row hidden, covered rows visible)
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {sheetDiagnostics.orphan_merged_masters.slice(0, 12).map((orphan) => (
+              <span
+                className="rounded-sm border bg-background/70 px-1.5 py-1 font-mono text-[11px] text-foreground"
+                key={`${orphan.range}-${orphan.master_address}`}
+                title={`Master ${orphan.master_address}; rescued into ${orphan.first_visible_address}`}
+              >
+                {orphan.range} → {orphan.first_visible_address}
+              </span>
+            ))}
+            {sheetDiagnostics.orphan_merged_masters.length > 12 && (
+              <span className="text-[11px] text-muted-foreground">
+                +{sheetDiagnostics.orphan_merged_masters.length - 12} more
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {sheetWarnings.length > 0 && (
+        <div className="mt-3 border-t pt-2">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-300">
+            Sheet warnings
+          </div>
+          <ul className="mt-1.5 grid gap-1">
+            {sheetWarnings.map((warning, index) => (
+              <li
+                className="rounded-sm border border-amber-300/40 bg-amber-100/30 px-2 py-1 text-amber-900 dark:border-amber-400/30 dark:bg-amber-900/20 dark:text-amber-200"
+                key={`${warning.code}-${index}`}
+              >
+                <span className="font-mono text-[10px]">{warning.code}</span> · {warning.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {workbookWarnings.length > 0 && (
+        <div className="mt-3 border-t pt-2">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Other sheets
+          </div>
+          <ul className="mt-1.5 grid gap-1">
+            {workbookWarnings.map((warning, index) => (
+              <li
+                className="rounded-sm border bg-background/70 px-2 py-1 text-muted-foreground"
+                key={`${warning.sheet}-${warning.code}-${index}`}
+              >
+                <span className="font-medium text-foreground">{warning.sheet}</span> ·{" "}
+                <span className="font-mono text-[10px]">{warning.code}</span> · {warning.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {workbookDiagnostics?.debug_logging_enabled && (
+        <div className="mt-3 border-t pt-2 text-[11px] text-muted-foreground">
+          Verbose reconstruction logging is enabled on the server
+          (<code>WORKBOOK_DEBUG_RECONSTRUCTION</code>). See backend logs for per-cell traces.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WorkbookUploadPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -534,6 +844,8 @@ export function WorkbookUploadPanel() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showRegionOverlay, setShowRegionOverlay] = useState(false);
 
   const selectedSheet = useMemo(
     () =>
@@ -586,13 +898,15 @@ export function WorkbookUploadPanel() {
     [selectedSheet],
   );
 
-  const sheetRows = useMemo(
+  const sheetGridResult = useMemo(
     () =>
       selectedSheet
         ? buildSheetGridRows(selectedSheet, workbookEdits[selectedSheet.name] ?? {})
-        : [],
+        : { rows: [] as WorkbookGridRow[], stats: null as WorkbookSheetReconstructionStats | null },
     [selectedSheet, workbookEdits],
   );
+  const sheetRows = sheetGridResult.rows;
+  const sheetStats = sheetGridResult.stats;
 
   const frozenRows = useMemo(() => frozenRowCount(selectedSheet), [selectedSheet]);
 
@@ -831,6 +1145,20 @@ export function WorkbookUploadPanel() {
           {result && (
             <>
               <Button
+                aria-label={
+                  showDiagnostics
+                    ? "Hide reconstruction diagnostics"
+                    : "Show reconstruction diagnostics"
+                }
+                onClick={() => setShowDiagnostics((prev) => !prev)}
+                title="Toggle workbook reconstruction diagnostics"
+                type="button"
+                variant={showDiagnostics ? "default" : "outline"}
+              >
+                <Bug className="size-4" />
+                Debug
+              </Button>
+              <Button
                 aria-label="Export edited workbook as XLSX"
                 disabled={isExporting || isUploading}
                 onClick={() => {
@@ -857,6 +1185,8 @@ export function WorkbookUploadPanel() {
                   setWorkbookEdits({});
                   setExportError(null);
                   setExportStatus(null);
+                  setShowDiagnostics(false);
+                  setShowRegionOverlay(false);
                 }}
                 type="button"
                 variant="outline"
@@ -1157,7 +1487,22 @@ export function WorkbookUploadPanel() {
                 </div>
               </div>
 
-              <div className="ag-theme-quartz workbook-reconstruction-grid relative h-[32rem] w-full">
+              {showDiagnostics && (
+                <ReconstructionDiagnosticsPanel
+                  sheet={selectedSheet}
+                  stats={sheetStats}
+                  workbookDiagnostics={result.metadata.reconstruction_diagnostics ?? null}
+                  showRegionOverlay={showRegionOverlay}
+                  onToggleRegionOverlay={() => setShowRegionOverlay((prev) => !prev)}
+                />
+              )}
+
+              <div
+                className={cn(
+                  "ag-theme-quartz workbook-reconstruction-grid relative h-[32rem] w-full",
+                  showRegionOverlay && "workbook-reconstruction-debug-overlay",
+                )}
+              >
                 {isSelectedSheetDegraded && sheetRows.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center rounded-md border border-dashed bg-background/40 px-6 text-center">
                     <p className="text-sm font-medium text-foreground">

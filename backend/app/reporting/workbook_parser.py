@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -12,7 +13,37 @@ from app.reporting.workbook_sync import (
     build_workbook_sync_summary,
 )
 
+# ``get_column_letter`` is used to derive merged-master addresses for
+# diagnostics. Imported lazily-friendly at module top because openpyxl is a
+# runtime dependency of the parser anyway.
+try:  # pragma: no cover - import guard exercised only when openpyxl is missing
+    from openpyxl.utils.cell import get_column_letter
+except ImportError:  # pragma: no cover - resolved at parse time
+    def get_column_letter(index: int) -> str:
+        # Minimal fallback that mirrors openpyxl's algorithm so diagnostics
+        # never crash even if openpyxl fails to import (the actual parser
+        # entrypoint will raise a clearer error in that case).
+        if index < 1:
+            return ""
+        result = ""
+        value = index
+        while value > 0:
+            value, remainder = divmod(value - 1, 26)
+            result = chr(65 + remainder) + result
+        return result
+
 logger = logging.getLogger("app.reporting.workbook")
+
+# Lightweight per-process toggle for verbose reconstruction diagnostics. The
+# feature flag is intentionally cheap (env-driven) so operators can flip it on
+# in production without redeploying. ``WORKBOOK_DEBUG_RECONSTRUCTION`` enables
+# additional ``logger.debug`` traces for skipped rows, hidden geometry, orphan
+# masters, and filtered regions. The structured warnings returned in
+# ``reconstruction_diagnostics`` are emitted regardless of this flag so the
+# frontend always has machine-readable visibility.
+WORKBOOK_DEBUG_RECONSTRUCTION = os.environ.get(
+    "WORKBOOK_DEBUG_RECONSTRUCTION", ""
+).strip().lower() in {"1", "true", "yes", "on"}
 
 MAX_PREVIEW_ROWS = 160
 MAX_PREVIEW_COLUMNS = 60
@@ -203,7 +234,11 @@ def _region_metadata(sheet: Any, start_row: int, end_row: int) -> dict[str, Any]
     }
 
 
-def _build_regions(sheet: Any) -> list[dict[str, Any]]:
+def _build_regions(
+    sheet: Any,
+    *,
+    diagnostics: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     regions: list[dict[str, Any]] = []
 
     for index, merged_range in enumerate(sheet.merged_cells.ranges, start=1):
@@ -226,12 +261,34 @@ def _build_regions(sheet: Any) -> list[dict[str, Any]]:
             }
         )
 
+    # Pre-compute every row that belongs to ANY merged range so a covered row
+    # (which has no own values) still anchors as an operational header during
+    # band detection. Without this, merged operational headers are dropped
+    # from ``active_rows`` and surrounding bands collapse incorrectly.
+    merged_row_set: set[int] = set()
+    for merged_range in sheet.merged_cells.ranges:
+        for row_number in range(merged_range.min_row, merged_range.max_row + 1):
+            merged_row_set.add(row_number)
+
     active_rows: list[int] = []
+    skipped_blank_rows: list[int] = []
     for row in sheet.iter_rows():
-        if any(cell.value is not None or _has_visual_style(cell) for cell in row):
-            active_rows.append(row[0].row)
+        row_number = row[0].row
+        has_visible_signal = any(
+            cell.value is not None or _has_visual_style(cell) for cell in row
+        )
+        if has_visible_signal or row_number in merged_row_set:
+            active_rows.append(row_number)
+        else:
+            skipped_blank_rows.append(row_number)
+
+    if diagnostics is not None:
+        diagnostics["skipped_blank_rows"] = skipped_blank_rows
+        diagnostics["merged_row_count"] = len(merged_row_set)
 
     if not active_rows:
+        if diagnostics is not None:
+            diagnostics["bands_built"] = 0
         return regions
 
     def append_band(index: int, start: int, end: int, kind: str) -> None:
@@ -264,6 +321,8 @@ def _build_regions(sheet: Any) -> list[dict[str, Any]]:
         previous_row = row_number
 
     append_band(region_index, start_row, previous_row, current_kind)
+    if diagnostics is not None:
+        diagnostics["bands_built"] = region_index
     return regions
 
 
@@ -375,6 +434,30 @@ def _degraded_sheet(
         "sync": sync,
         "degraded": True,
         "degraded_reason": f"{phase}:{type(error).__name__}",
+        "reconstruction_diagnostics": {
+            "sheet": sheet_name,
+            "warnings": [
+                {
+                    "code": "sheet_degraded",
+                    "message": (
+                        f"Sheet failed to parse during {phase}; preview is unavailable."
+                    ),
+                    "error": f"{type(error).__name__}: {error}",
+                }
+            ],
+            "skipped_blank_rows": [],
+            "skipped_oversized_rows": 0,
+            "skipped_oversized_columns": 0,
+            "hidden_row_count": 0,
+            "hidden_column_count": 0,
+            "merged_region_count": 0,
+            "merged_master_count": 0,
+            "orphan_merged_masters": [],
+            "merged_rows_outside_preview": 0,
+            "filtered_regions": 0,
+            "bands_built": 0,
+            "merged_row_count": 0,
+        },
     }
 
 
@@ -392,6 +475,27 @@ def _parse_single_sheet(
 
     sheet_name = getattr(sheet, "title", None) or f"Sheet{sheet_index}"
 
+    # Per-sheet reconstruction diagnostics. These are intentionally machine-
+    # readable so the frontend can surface them in the diagnostics panel
+    # without the user having to inspect server logs. They are also emitted
+    # via ``logger.warning`` so SREs can see them in production traces.
+    diagnostics: dict[str, Any] = {
+        "sheet": sheet_name,
+        "warnings": [],
+        "skipped_blank_rows": [],
+        "skipped_oversized_rows": 0,
+        "skipped_oversized_columns": 0,
+        "hidden_row_count": 0,
+        "hidden_column_count": 0,
+        "merged_region_count": 0,
+        "merged_master_count": 0,
+        "orphan_merged_masters": [],
+        "merged_rows_outside_preview": 0,
+        "filtered_regions": 0,
+        "bands_built": 0,
+        "merged_row_count": 0,
+    }
+
     try:
         max_row = max(int(getattr(sheet, "max_row", 0) or 0), 0)
         max_column = max(int(getattr(sheet, "max_column", 0) or 0), 0)
@@ -402,13 +506,20 @@ def _parse_single_sheet(
         formula_count = 0
         cells: list[dict[str, Any]] = []
         preview_merged_cells: set[tuple[int, int]] = set()
+        merged_master_addresses: list[str] = []
+        merged_rows_outside_preview = 0
 
         try:
             for merged_range in sheet.merged_cells.ranges:
+                diagnostics["merged_region_count"] += 1
+                merged_master_addresses.append(
+                    f"{get_column_letter(merged_range.min_col)}{merged_range.min_row}"
+                )
                 if (
                     merged_range.min_row > preview_row_limit
                     or merged_range.min_col > preview_column_limit
                 ):
+                    merged_rows_outside_preview += 1
                     continue
                 for row_number in range(
                     merged_range.min_row,
@@ -426,6 +537,27 @@ def _parse_single_sheet(
                 sheet_name,
                 filename,
                 merged_preview_error,
+            )
+            diagnostics["warnings"].append(
+                {
+                    "code": "merged_preview_failed",
+                    "message": "Could not enumerate merged regions for preview.",
+                    "error": str(merged_preview_error),
+                }
+            )
+
+        diagnostics["merged_master_count"] = len(merged_master_addresses)
+        diagnostics["merged_rows_outside_preview"] = merged_rows_outside_preview
+        if merged_rows_outside_preview > 0:
+            diagnostics["warnings"].append(
+                {
+                    "code": "merged_outside_preview",
+                    "message": (
+                        f"{merged_rows_outside_preview} merged region(s) start beyond "
+                        f"the preview window ({preview_row_limit}r x "
+                        f"{preview_column_limit}c) and may be visually clipped."
+                    ),
+                }
             )
 
         if max_row > 0 and max_column > 0:
@@ -540,6 +672,75 @@ def _parse_single_sheet(
                 filename,
                 dim_error,
             )
+            diagnostics["warnings"].append(
+                {
+                    "code": "dimensions_failed",
+                    "message": "Failed to read row/column dimensions; geometry may degrade.",
+                    "error": str(dim_error),
+                }
+            )
+
+        diagnostics["hidden_row_count"] = len(hidden_rows)
+        diagnostics["hidden_column_count"] = len(hidden_columns)
+
+        # Orphan-master detection: any merged master cell whose row is hidden
+        # while at least one covered row in the same merge is visible. The
+        # frontend uses this to decide whether to surface the master text in
+        # the first visible covered cell so operational headers do not vanish.
+        orphan_masters: list[dict[str, Any]] = []
+        try:
+            hidden_row_set = set(hidden_rows)
+            for merged_range in sheet.merged_cells.ranges:
+                if merged_range.min_row not in hidden_row_set:
+                    continue
+                visible_rows = [
+                    row_number
+                    for row_number in range(
+                        merged_range.min_row, merged_range.max_row + 1
+                    )
+                    if row_number not in hidden_row_set
+                ]
+                if not visible_rows:
+                    continue
+                orphan_masters.append(
+                    {
+                        "range": merged_range.coord,
+                        "master_address": (
+                            f"{get_column_letter(merged_range.min_col)}{merged_range.min_row}"
+                        ),
+                        "first_visible_row": visible_rows[0],
+                        "first_visible_column": merged_range.min_col,
+                        "first_visible_address": (
+                            f"{get_column_letter(merged_range.min_col)}{visible_rows[0]}"
+                        ),
+                        "visible_rows": visible_rows,
+                    }
+                )
+        except Exception as orphan_error:  # noqa: BLE001
+            logger.warning(
+                "workbook sync orphan-master detection fallback: sheet=%r "
+                "workbook=%r phase=orphan_masters error=%s",
+                sheet_name,
+                filename,
+                orphan_error,
+            )
+            diagnostics["warnings"].append(
+                {
+                    "code": "orphan_master_detection_failed",
+                    "message": "Could not derive orphan merged-master metadata.",
+                    "error": str(orphan_error),
+                }
+            )
+
+        diagnostics["orphan_merged_masters"] = orphan_masters
+        if orphan_masters:
+            logger.info(
+                "workbook reconstruction: %d orphan merged master(s) detected on "
+                "sheet=%r workbook=%r",
+                len(orphan_masters),
+                sheet_name,
+                filename,
+            )
 
         try:
             freeze_panes = _freeze_pane_metadata(sheet)
@@ -591,7 +792,7 @@ def _parse_single_sheet(
         }
 
         try:
-            regions = _build_regions(sheet)
+            regions = _build_regions(sheet, diagnostics=diagnostics)
         except Exception as region_error:  # noqa: BLE001
             logger.warning(
                 "workbook sync regions fallback: sheet=%r workbook=%r "
@@ -601,6 +802,13 @@ def _parse_single_sheet(
                 region_error,
             )
             regions = []
+            diagnostics["warnings"].append(
+                {
+                    "code": "regions_failed",
+                    "message": "Workbook region detection failed; using empty regions.",
+                    "error": str(region_error),
+                }
+            )
 
         try:
             sync = build_sheet_sync_map(
@@ -611,6 +819,7 @@ def _parse_single_sheet(
                 freeze_panes=freeze_panes,
                 preview_row_limit=preview_row_limit,
                 preview_column_limit=preview_column_limit,
+                orphan_masters=orphan_masters,
             )
         except Exception as sync_error:  # noqa: BLE001
             logger.warning(
@@ -630,6 +839,13 @@ def _parse_single_sheet(
                 degraded=True,
                 degraded_reason=f"build_sync_map:{type(sync_error).__name__}",
             )
+            diagnostics["warnings"].append(
+                {
+                    "code": "sync_build_failed",
+                    "message": "Workbook sync map could not be built; sheet is degraded.",
+                    "error": str(sync_error),
+                }
+            )
 
         try:
             dimension = sheet.calculate_dimension()
@@ -644,6 +860,25 @@ def _parse_single_sheet(
             zoom_scale = sheet.sheet_view.zoomScale
         except Exception:
             zoom_scale = None
+
+        # Emit verbose debug traces only when the env flag is on. The
+        # structured diagnostics dict is always returned and surfaced in the
+        # workbook sync output so the frontend can display reconstruction
+        # warnings without operators flipping a flag first.
+        if WORKBOOK_DEBUG_RECONSTRUCTION:
+            logger.debug(
+                "workbook reconstruction diagnostics: workbook=%r sheet=%r "
+                "hidden_rows=%d hidden_columns=%d merged_regions=%d "
+                "orphan_masters=%d skipped_blank_rows=%d bands_built=%d",
+                filename,
+                sheet_name,
+                diagnostics["hidden_row_count"],
+                diagnostics["hidden_column_count"],
+                diagnostics["merged_region_count"],
+                len(diagnostics["orphan_merged_masters"]),
+                len(diagnostics["skipped_blank_rows"]),
+                diagnostics["bands_built"],
+            )
 
         return {
             "name": sheet_name,
@@ -662,6 +897,7 @@ def _parse_single_sheet(
                 "zoom_scale": zoom_scale,
             },
             "sync": sync,
+            "reconstruction_diagnostics": diagnostics,
         }
     except Exception as exc:  # noqa: BLE001
         return _degraded_sheet(
@@ -708,6 +944,27 @@ def parse_xlsx_workbook(path: Path, *, filename: str) -> dict[str, Any]:
             degraded_sheets,
         )
 
+    # Workbook-level reconstruction diagnostics. We aggregate per-sheet
+    # diagnostics so the frontend can show a single rolled-up panel without
+    # having to re-traverse every sheet's metadata.
+    aggregated_warnings: list[dict[str, Any]] = []
+    aggregated_orphan_masters = 0
+    aggregated_hidden_rows = 0
+    aggregated_hidden_columns = 0
+    aggregated_merged_regions = 0
+    aggregated_skipped_rows = 0
+    aggregated_bands_built = 0
+    for sheet in sheets:
+        sheet_diag = sheet.get("reconstruction_diagnostics") or {}
+        for warning in sheet_diag.get("warnings", []) or []:
+            aggregated_warnings.append({"sheet": sheet.get("name"), **warning})
+        aggregated_orphan_masters += len(sheet_diag.get("orphan_merged_masters", []) or [])
+        aggregated_hidden_rows += int(sheet_diag.get("hidden_row_count", 0) or 0)
+        aggregated_hidden_columns += int(sheet_diag.get("hidden_column_count", 0) or 0)
+        aggregated_merged_regions += int(sheet_diag.get("merged_region_count", 0) or 0)
+        aggregated_skipped_rows += len(sheet_diag.get("skipped_blank_rows", []) or [])
+        aggregated_bands_built += int(sheet_diag.get("bands_built", 0) or 0)
+
     return {
         "filename": filename,
         "sheet_count": len(sheets),
@@ -724,4 +981,14 @@ def parse_xlsx_workbook(path: Path, *, filename: str) -> dict[str, Any]:
         ),
         "sheets": sheets,
         "degraded_sheets": degraded_sheets,
+        "reconstruction_diagnostics": {
+            "warnings": aggregated_warnings,
+            "orphan_merged_masters": aggregated_orphan_masters,
+            "hidden_rows": aggregated_hidden_rows,
+            "hidden_columns": aggregated_hidden_columns,
+            "merged_regions": aggregated_merged_regions,
+            "skipped_blank_rows": aggregated_skipped_rows,
+            "bands_built": aggregated_bands_built,
+            "debug_logging_enabled": WORKBOOK_DEBUG_RECONSTRUCTION,
+        },
     }

@@ -313,6 +313,19 @@ export type WorkbookSyncCell = {
     };
   } | null;
   blank?: boolean;
+  orphan_master?: {
+    master_address: string | null;
+    range: string | null;
+  } | null;
+};
+
+export type WorkbookOrphanMaster = {
+  range: string;
+  master_address: string;
+  first_visible_row: number;
+  first_visible_column: number;
+  first_visible_address: string;
+  visible_rows: number[];
 };
 
 export type WorkbookSheetSync = {
@@ -334,8 +347,44 @@ export type WorkbookSheetSync = {
   rows: WorkbookSyncRow[];
   columns: WorkbookSyncColumn[];
   cells: WorkbookSyncCell[];
+  orphan_masters?: WorkbookOrphanMaster[];
   degraded?: boolean;
   degraded_reason?: string | null;
+};
+
+export type WorkbookReconstructionWarning = {
+  sheet?: string | null;
+  code: string;
+  message: string;
+  error?: string;
+};
+
+export type WorkbookReconstructionDiagnostics = {
+  warnings: WorkbookReconstructionWarning[];
+  orphan_merged_masters: number;
+  hidden_rows: number;
+  hidden_columns: number;
+  merged_regions: number;
+  skipped_blank_rows: number;
+  bands_built: number;
+  debug_logging_enabled?: boolean;
+};
+
+export type WorkbookSheetReconstructionDiagnostics = {
+  sheet: string;
+  warnings: WorkbookReconstructionWarning[];
+  skipped_blank_rows: number[];
+  skipped_oversized_rows: number;
+  skipped_oversized_columns: number;
+  hidden_row_count: number;
+  hidden_column_count: number;
+  merged_region_count: number;
+  merged_master_count: number;
+  orphan_merged_masters: WorkbookOrphanMaster[];
+  merged_rows_outside_preview: number;
+  filtered_regions: number;
+  bands_built: number;
+  merged_row_count: number;
 };
 
 export type WorkbookSheetPreview = {
@@ -368,6 +417,7 @@ export type WorkbookSheetPreview = {
   regions: WorkbookRegionPreview[];
   cells: WorkbookCellPreview[];
   sync: WorkbookSheetSync;
+  reconstruction_diagnostics?: WorkbookSheetReconstructionDiagnostics;
   degraded?: boolean;
   degraded_reason?: string | null;
 };
@@ -380,6 +430,7 @@ export type WorkbookParsePreview = {
   workbook_sync: Record<string, unknown>;
   sheets: WorkbookSheetPreview[];
   degraded_sheets?: string[];
+  reconstruction_diagnostics?: WorkbookReconstructionDiagnostics;
 };
 
 export type WorkbookUploadResponse = {

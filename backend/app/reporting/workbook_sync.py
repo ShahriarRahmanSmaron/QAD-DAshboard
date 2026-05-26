@@ -124,6 +124,7 @@ def build_sheet_sync_map(
     freeze_panes: dict[str, Any],
     preview_row_limit: int,
     preview_column_limit: int,
+    orphan_masters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     hidden_rows = set(structure["hidden_rows"])
     hidden_columns = set(structure["hidden_columns"])
@@ -135,6 +136,25 @@ def build_sheet_sync_map(
     cell_lookup = {(cell["row"], cell["column"]): cell for cell in cells}
     merge_by_cell, merged_regions = _merged_lookup(sheet)
     region_by_id = {region["id"]: region for region in regions}
+
+    # Build a fast lookup of orphan masters keyed by their first visible
+    # covered cell. The frontend uses this to "rescue" the master text from a
+    # hidden anchor row into the first visible covered cell of the merge so
+    # operational header titles do not vanish purely because their anchor
+    # row is hidden by Excel.
+    orphan_masters = orphan_masters or []
+    orphan_first_visible: dict[tuple[int, int], dict[str, Any]] = {}
+    orphan_master_lookup: dict[str, dict[str, Any]] = {}
+    for orphan in orphan_masters:
+        try:
+            row = int(orphan["first_visible_row"])
+            column = int(orphan["first_visible_column"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        orphan_first_visible[(row, column)] = orphan
+        master_address = orphan.get("master_address")
+        if isinstance(master_address, str):
+            orphan_master_lookup[master_address] = orphan
 
     row_map: list[dict[str, Any]] = []
     for row_number in range(1, preview_row_limit + 1):
@@ -227,6 +247,18 @@ def build_sheet_sync_map(
                 readonly_reason = "readonly_region"
 
             editable = readonly_reason is None and row_role == "editable"
+
+            # If this cell is the first visible covered cell of an orphan
+            # merge (master row hidden), surface the orphan-master metadata
+            # so the frontend can render the master's text here.
+            orphan_payload: dict[str, Any] | None = None
+            if (row_number, column_number) in orphan_first_visible:
+                orphan = orphan_first_visible[(row_number, column_number)]
+                orphan_payload = {
+                    "master_address": orphan.get("master_address"),
+                    "range": orphan.get("range"),
+                }
+
             cell_map.append(
                 {
                     "address": cell["address"] if cell else address,
@@ -240,6 +272,7 @@ def build_sheet_sync_map(
                     "has_formula": has_formula,
                     "merge": merge,
                     "blank": cell is None or cell.get("value") is None,
+                    "orphan_master": orphan_payload,
                 }
             )
 
@@ -278,6 +311,7 @@ def build_sheet_sync_map(
         "rows": row_map,
         "columns": column_map,
         "cells": cell_map,
+        "orphan_masters": list(orphan_masters),
     }
 
 
@@ -381,6 +415,7 @@ def build_empty_sheet_sync_map(
         "rows": [],
         "columns": [],
         "cells": [],
+        "orphan_masters": [],
         "degraded": bool(degraded),
         "degraded_reason": degraded_reason,
     }
