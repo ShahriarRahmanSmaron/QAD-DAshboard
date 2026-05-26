@@ -19,6 +19,7 @@ MAX_PREVIEW_COLUMNS = 60
 MAX_REGION_ROWS_GAP = 1
 HEADER_TEXT_MARKERS = ("report date", "buyer-wise", "summary", "stock", "test", "shade")
 SUMMARY_TEXT_MARKERS = ("total", "grand total", "previous day", "running day")
+FOOTER_TEXT_MARKERS = ("prepared by", "checked by", "approved by", "signature", "remarks", "note")
 
 
 def _cell_value(value: Any) -> str | int | float | bool | None:
@@ -52,6 +53,36 @@ def _border_side(side: Any) -> dict[str, Any] | None:
         "style": side.style,
         "color": _color_value(side.color),
     }
+
+
+def _has_visual_style(cell: Any) -> bool:
+    if getattr(cell, "has_style", False):
+        return True
+    fill = getattr(cell, "fill", None)
+    if fill is not None and getattr(fill, "fill_type", None):
+        return True
+    border = getattr(cell, "border", None)
+    if border is not None and any(
+        getattr(getattr(border, side, None), "style", None)
+        for side in ("left", "right", "top", "bottom")
+    ):
+        return True
+    font = getattr(cell, "font", None)
+    if font is not None and (getattr(font, "bold", False) or getattr(font, "italic", False)):
+        return True
+    alignment = getattr(cell, "alignment", None)
+    return bool(
+        alignment is not None
+        and (
+            getattr(alignment, "horizontal", None)
+            or getattr(alignment, "vertical", None)
+            or getattr(alignment, "wrap_text", False)
+        )
+    )
+
+
+def _is_formula_value(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("=")
 
 
 def _cell_style(cell: Any) -> dict[str, Any]:
@@ -91,24 +122,40 @@ def _normalized_region_kind(sheet: Any, start_row: int, end_row: int) -> str:
     values: list[str] = []
     formula_count = 0
     styled_count = 0
+    filled_count = 0
+    bold_count = 0
 
     for row in sheet.iter_rows(min_row=start_row, max_row=end_row):
         for cell in row:
+            if _has_visual_style(cell):
+                styled_count += 1
+            fill = getattr(cell, "fill", None)
+            if fill is not None and getattr(fill, "fill_type", None):
+                filled_count += 1
+            font = getattr(cell, "font", None)
+            if font is not None and getattr(font, "bold", False):
+                bold_count += 1
             if cell.value is None:
                 continue
             text_value = str(cell.value).strip().lower()
             values.append(text_value)
-            if text_value.startswith("="):
+            if _is_formula_value(cell.value):
                 formula_count += 1
-            if cell.style_id:
-                styled_count += 1
 
     joined = " ".join(values)
+    if not values and styled_count:
+        return "worksheet_separator"
+    if any(marker in joined for marker in FOOTER_TEXT_MARKERS):
+        return "footer_region"
     if any(marker in joined for marker in SUMMARY_TEXT_MARKERS):
         return "summary_band"
+    if formula_count > 0 and formula_count >= max(1, len(values) // 4):
+        return "formula_row"
     if any(marker in joined for marker in HEADER_TEXT_MARKERS):
-        return "grouped_section"
-    if formula_count > 0 and formula_count >= max(1, len(values) // 3):
+        return "section_header"
+    if len(values) <= 3 and (filled_count or bold_count) and styled_count >= max(1, len(values)):
+        return "section_header"
+    if formula_count > 0:
         return "readonly_band"
     if styled_count > 0 and len(values) <= 4:
         return "metric_zone"
@@ -119,6 +166,9 @@ def _region_metadata(sheet: Any, start_row: int, end_row: int) -> dict[str, Any]
     formula_count = 0
     non_empty_count = 0
     style_ids: set[int] = set()
+    fill_colors: set[str] = set()
+    font_names: set[str] = set()
+    bold_count = 0
     merged_ranges = []
 
     for merged_range in sheet.merged_cells.ranges:
@@ -131,13 +181,24 @@ def _region_metadata(sheet: Any, start_row: int, end_row: int) -> dict[str, Any]
                 continue
             non_empty_count += 1
             style_ids.add(cell.style_id)
-            if isinstance(cell.value, str) and cell.value.startswith("="):
+            fill_color = _color_value(getattr(cell.fill, "fgColor", None))
+            if fill_color:
+                fill_colors.add(fill_color)
+            font_name = getattr(cell.font, "name", None)
+            if font_name:
+                font_names.add(str(font_name))
+            if getattr(cell.font, "bold", False):
+                bold_count += 1
+            if _is_formula_value(cell.value):
                 formula_count += 1
 
     return {
         "formula_count": formula_count,
         "non_empty_cell_count": non_empty_count,
         "style_ids": sorted(style_ids),
+        "fill_colors": sorted(fill_colors),
+        "font_names": sorted(font_names),
+        "bold_cell_count": bold_count,
         "merged_ranges": merged_ranges,
     }
 
@@ -167,7 +228,7 @@ def _build_regions(sheet: Any) -> list[dict[str, Any]]:
 
     active_rows: list[int] = []
     for row in sheet.iter_rows():
-        if any(cell.value is not None for cell in row):
+        if any(cell.value is not None or _has_visual_style(cell) for cell in row):
             active_rows.append(row[0].row)
 
     if not active_rows:
@@ -227,10 +288,26 @@ def _freeze_pane_metadata(sheet: Any) -> dict[str, int | str | None]:
 
 def _empty_structure(sheet: Any | None = None) -> dict[str, Any]:
     sheet_state = getattr(sheet, "sheet_state", None) if sheet is not None else None
+    sheet_format = getattr(sheet, "sheet_format", None) if sheet is not None else None
+    default_row_height = (
+        getattr(sheet_format, "defaultRowHeight", None) if sheet_format is not None else None
+    )
+    default_column_width = (
+        getattr(sheet_format, "defaultColWidth", None) if sheet_format is not None else None
+    )
     return {
         "merged_cells": [],
         "row_heights": {},
         "column_widths": {},
+        "default_row_height": default_row_height,
+        "default_column_width": default_column_width,
+        "sheet_format": {
+            "base_column_width": (
+                getattr(sheet_format, "baseColWidth", None) if sheet_format is not None else None
+            ),
+            "default_row_height": default_row_height,
+            "default_column_width": default_column_width,
+        },
         "hidden_rows": [],
         "hidden_columns": [],
         "freeze_panes": None,
@@ -324,27 +401,56 @@ def _parse_single_sheet(
         non_empty_cell_count = 0
         formula_count = 0
         cells: list[dict[str, Any]] = []
+        preview_merged_cells: set[tuple[int, int]] = set()
+
+        try:
+            for merged_range in sheet.merged_cells.ranges:
+                if (
+                    merged_range.min_row > preview_row_limit
+                    or merged_range.min_col > preview_column_limit
+                ):
+                    continue
+                for row_number in range(
+                    merged_range.min_row,
+                    min(merged_range.max_row, preview_row_limit) + 1,
+                ):
+                    for column_number in range(
+                        merged_range.min_col,
+                        min(merged_range.max_col, preview_column_limit) + 1,
+                    ):
+                        preview_merged_cells.add((row_number, column_number))
+        except Exception as merged_preview_error:  # noqa: BLE001
+            logger.warning(
+                "workbook sync merged preview fallback: sheet=%r workbook=%r "
+                "phase=merged_preview error=%s",
+                sheet_name,
+                filename,
+                merged_preview_error,
+            )
 
         if max_row > 0 and max_column > 0:
             try:
                 for row in sheet.iter_rows(max_row=max_row, max_col=max_column):
                     for cell in row:
-                        if cell.value is None:
-                            continue
-                        non_empty_cell_count += 1
-                        if isinstance(cell.value, str) and cell.value.startswith("="):
-                            formula_count += 1
-                        if (
-                            cell.row > preview_row_limit
-                            or cell.column > preview_column_limit
+                        has_value = cell.value is not None
+                        if has_value:
+                            non_empty_cell_count += 1
+                            if _is_formula_value(cell.value):
+                                formula_count += 1
+
+                        inside_preview = (
+                            cell.row <= preview_row_limit
+                            and cell.column <= preview_column_limit
+                        )
+                        has_preview_geometry = (cell.row, cell.column) in preview_merged_cells
+                        if not inside_preview or (
+                            not has_value
+                            and not _has_visual_style(cell)
+                            and not has_preview_geometry
                         ):
                             continue
 
-                        formula = (
-                            cell.value
-                            if isinstance(cell.value, str) and cell.value.startswith("=")
-                            else None
-                        )
+                        formula = cell.value if _is_formula_value(cell.value) else None
                         try:
                             style = _cell_style(cell)
                         except Exception as style_error:  # noqa: BLE001
@@ -383,6 +489,17 @@ def _parse_single_sheet(
         hidden_columns: list[str] = []
         row_groups: dict[str, int] = {}
         column_groups: dict[str, int] = {}
+        sheet_format = getattr(sheet, "sheet_format", None)
+        default_row_height = (
+            getattr(sheet_format, "defaultRowHeight", None) if sheet_format is not None else None
+        )
+        default_column_width = (
+            getattr(sheet_format, "defaultColWidth", None) if sheet_format is not None else None
+        )
+        base_column_width = (
+            getattr(sheet_format, "baseColWidth", None) if sheet_format is not None else None
+        )
+        outline_properties = getattr(getattr(sheet, "sheet_properties", None), "outlinePr", None)
 
         try:
             row_heights = {
@@ -454,6 +571,15 @@ def _parse_single_sheet(
             "merged_cells": merged_cells,
             "row_heights": row_heights,
             "column_widths": column_widths,
+            "default_row_height": default_row_height,
+            "default_column_width": default_column_width,
+            "sheet_format": {
+                "base_column_width": base_column_width,
+                "default_row_height": default_row_height,
+                "default_column_width": default_column_width,
+                "outline_summary_below": getattr(outline_properties, "summaryBelow", None),
+                "outline_summary_right": getattr(outline_properties, "summaryRight", None),
+            },
             "hidden_rows": hidden_rows,
             "hidden_columns": hidden_columns,
             "freeze_panes": (
@@ -565,11 +691,13 @@ def parse_xlsx_workbook(path: Path, *, filename: str) -> dict[str, Any]:
 
     workbook = load_workbook(path, data_only=False)
     sheets: list[dict[str, Any]] = []
-
-    for sheet_index, sheet in enumerate(workbook.worksheets, start=1):
-        sheets.append(
-            _parse_single_sheet(sheet, sheet_index=sheet_index, filename=filename)
-        )
+    try:
+        for sheet_index, sheet in enumerate(workbook.worksheets, start=1):
+            sheets.append(
+                _parse_single_sheet(sheet, sheet_index=sheet_index, filename=filename)
+            )
+    finally:
+        workbook.close()
 
     parser_name = "openpyxl+pandas" if pandas_sheet_names else "openpyxl"
     degraded_sheets = [sheet["name"] for sheet in sheets if sheet.get("degraded")]

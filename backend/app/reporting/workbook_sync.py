@@ -7,8 +7,19 @@ from typing import Any
 from openpyxl.utils.cell import get_column_letter
 
 EDITABLE_REGION_KINDS = {"operational_block", "metric_zone"}
-READONLY_REGION_KINDS = {"readonly_band", "summary_band"}
-STRUCTURAL_REGION_KINDS = {"grouped_section", "merged_cell_region"}
+READONLY_REGION_KINDS = {
+    "readonly_band",
+    "summary_band",
+    "formula_row",
+    "calculated_row",
+    "footer_region",
+}
+STRUCTURAL_REGION_KINDS = {
+    "grouped_section",
+    "section_header",
+    "worksheet_separator",
+    "merged_cell_region",
+}
 
 
 def _region_role(kind: str) -> str:
@@ -183,59 +194,63 @@ def build_sheet_sync_map(
         )
 
     cell_map: list[dict[str, Any]] = []
-    for (row_number, column_number), cell in sorted(cell_lookup.items()):
-        if row_number > preview_row_limit or column_number > preview_column_limit:
-            continue
+    for row_number in range(1, preview_row_limit + 1):
+        for column_number in range(1, preview_column_limit + 1):
+            column_name = get_column_letter(column_number)
+            address = _cell_address(row_number, column_number)
+            cell = cell_lookup.get((row_number, column_number))
+            region_ids = _region_ids_for_point(
+                regions,
+                row=row_number,
+                column=column_number,
+                include_merged=True,
+            )
+            non_merged_region_ids = [
+                region_id
+                for region_id in region_ids
+                if region_by_id.get(region_id, {}).get("kind") != "merged_cell_region"
+            ]
+            row_role = _role_for_regions(regions, non_merged_region_ids)
+            merge = merge_by_cell.get((row_number, column_number))
+            has_formula = bool(cell and cell.get("formula"))
+            readonly_reason = None
 
-        column_name = get_column_letter(column_number)
-        region_ids = _region_ids_for_point(
-            regions,
-            row=row_number,
-            column=column_number,
-            include_merged=True,
-        )
-        non_merged_region_ids = [
-            region_id
-            for region_id in region_ids
-            if region_by_id.get(region_id, {}).get("kind") != "merged_cell_region"
-        ]
-        row_role = _role_for_regions(regions, non_merged_region_ids)
-        merge = merge_by_cell.get((row_number, column_number))
-        has_formula = bool(cell.get("formula"))
-        readonly_reason = None
+            if row_number in hidden_rows or column_name in hidden_columns:
+                readonly_reason = "hidden_geometry"
+            elif merge and merge["role"] == "covered":
+                readonly_reason = "merged_covered_cell"
+            elif has_formula:
+                readonly_reason = "formula"
+            elif row_role == "structural":
+                readonly_reason = "structural_region"
+            elif row_role == "readonly":
+                readonly_reason = "readonly_region"
 
-        if row_number in hidden_rows or column_name in hidden_columns:
-            readonly_reason = "hidden_geometry"
-        elif merge and merge["role"] == "covered":
-            readonly_reason = "merged_covered_cell"
-        elif has_formula:
-            readonly_reason = "formula"
-        elif row_role == "structural":
-            readonly_reason = "structural_region"
-        elif row_role == "readonly":
-            readonly_reason = "readonly_region"
-
-        editable = readonly_reason is None and row_role == "editable"
-        cell_map.append(
-            {
-                "address": cell["address"],
-                "workbook_row": row_number,
-                "workbook_column": column_number,
-                "grid_row_id": f"{sheet.title}::r{row_number}",
-                "grid_field": f"c{column_number}",
-                "region_ids": region_ids,
-                "editable": editable,
-                "readonly_reason": readonly_reason,
-                "has_formula": has_formula,
-                "merge": merge,
-            }
-        )
+            editable = readonly_reason is None and row_role == "editable"
+            cell_map.append(
+                {
+                    "address": cell["address"] if cell else address,
+                    "workbook_row": row_number,
+                    "workbook_column": column_number,
+                    "grid_row_id": f"{sheet.title}::r{row_number}",
+                    "grid_field": f"c{column_number}",
+                    "region_ids": region_ids,
+                    "editable": editable,
+                    "readonly_reason": readonly_reason,
+                    "has_formula": has_formula,
+                    "merge": merge,
+                    "blank": cell is None or cell.get("value") is None,
+                }
+            )
 
     layout = {
         "dimension": sheet.calculate_dimension(),
         "merged_cells": structure["merged_cells"],
         "row_heights": row_heights,
         "column_widths": column_widths,
+        "default_row_height": structure.get("default_row_height"),
+        "default_column_width": structure.get("default_column_width"),
+        "sheet_format": structure.get("sheet_format", {}),
         "hidden_rows": structure["hidden_rows"],
         "hidden_columns": structure["hidden_columns"],
         "freeze_panes": freeze_panes,
@@ -319,6 +334,9 @@ def build_empty_sheet_sync_map(
         "merged_cells": [],
         "row_heights": {},
         "column_widths": {},
+        "default_row_height": None,
+        "default_column_width": None,
+        "sheet_format": {},
         "hidden_rows": [],
         "hidden_columns": [],
         "freeze_panes": None,
@@ -333,6 +351,9 @@ def build_empty_sheet_sync_map(
         "merged_cells": list(safe_structure.get("merged_cells", [])),
         "row_heights": dict(safe_structure.get("row_heights", {})),
         "column_widths": dict(safe_structure.get("column_widths", {})),
+        "default_row_height": safe_structure.get("default_row_height"),
+        "default_column_width": safe_structure.get("default_column_width"),
+        "sheet_format": dict(safe_structure.get("sheet_format", {})),
         "hidden_rows": list(safe_structure.get("hidden_rows", [])),
         "hidden_columns": list(safe_structure.get("hidden_columns", [])),
         "freeze_panes": safe_freeze,

@@ -312,6 +312,7 @@ export type WorkbookSyncCell = {
       columns: number;
     };
   } | null;
+  blank?: boolean;
 };
 
 export type WorkbookSheetSync = {
@@ -349,6 +350,9 @@ export type WorkbookSheetPreview = {
     merged_cells: string[];
     row_heights: Record<string, number>;
     column_widths: Record<string, number>;
+    default_row_height?: number | null;
+    default_column_width?: number | null;
+    sheet_format?: Record<string, unknown>;
     hidden_rows: number[];
     hidden_columns: string[];
     freeze_panes: string | null;

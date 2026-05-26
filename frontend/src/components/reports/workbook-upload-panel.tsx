@@ -51,11 +51,16 @@ type WorkbookGridRow = {
   __editableFields: Record<string, boolean>;
   __readonlyReasons: Record<string, string>;
   __addresses: Record<string, string>;
+  __cellRegionKinds: Record<string, string>;
+  __formulaFields: Record<string, boolean>;
+  __mergeCovered: Record<string, boolean>;
+  __mergeSpans: Record<string, WorkbookMergeSpan>;
   [field: string]: unknown;
 };
 
 type WorkbookEditValue = string | number | boolean | null;
 type WorkbookSheetEditMap = Record<string, WorkbookEditValue>;
+type WorkbookMergeSpan = { range: string; rows: number; columns: number };
 
 type SafeSyncRegions = NonNullable<WorkbookSheetPreview["sync"]>["regions"];
 
@@ -118,7 +123,10 @@ function isSheetDegraded(sheet: WorkbookSheetPreview | null | undefined) {
 
 const excelColumnLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const maxSheetPreviewRows = 120;
-const maxSheetPreviewColumns = 36;
+const maxSheetPreviewColumns = 60;
+const excelPointToPixelRatio = 96 / 72;
+const defaultExcelRowHeight = 15;
+const defaultExcelColumnWidth = 8.43;
 
 function formatBytes(value: number) {
   if (value < 1024) {
@@ -160,6 +168,30 @@ function nestedRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function numberFromUnknown(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function cssTextAlign(value: unknown) {
+  if (value === "center" || value === "right" || value === "left" || value === "justify") {
+    return value;
+  }
+  if (value === "centerContinuous") {
+    return "center";
+  }
+  return null;
+}
+
+function cssVerticalAlign(value: unknown) {
+  if (value === "center") {
+    return "middle";
+  }
+  if (value === "top" || value === "bottom" || value === "middle") {
+    return value;
+  }
+  return null;
+}
+
 function borderStyle(side: unknown) {
   const sideRecord = nestedRecord(side);
   const style = sideRecord.style;
@@ -179,8 +211,15 @@ function styleFromCell(cell: WorkbookCellPreview): Record<string, string | numbe
   const result: Record<string, string | number> = {};
   const fillColor = normalizeColor(fill.fg_color);
   const fontColor = normalizeColor(font.color);
+  const fontSize = numberFromUnknown(font.size);
+  const horizontal = cssTextAlign(alignment.horizontal);
+  const vertical = cssVerticalAlign(alignment.vertical);
 
-  if (fillColor && fillColor.toLowerCase() !== "#000000") {
+  if (
+    fillColor &&
+    fillColor.toLowerCase() !== "#000000" &&
+    fillColor.toLowerCase() !== "#ffffff"
+  ) {
     result.background = fillColor;
   }
   if (font.bold) {
@@ -189,11 +228,33 @@ function styleFromCell(cell: WorkbookCellPreview): Record<string, string | numbe
   if (font.italic) {
     result.fontStyle = "italic";
   }
-  if (fontColor && fontColor.toLowerCase() !== "#000000") {
+  if (
+    fontColor &&
+    fontColor.toLowerCase() !== "#000000" &&
+    fontColor.toLowerCase() !== "#ffffff"
+  ) {
     result.color = fontColor;
   }
-  if (alignment.horizontal) {
-    result.textAlign = String(alignment.horizontal);
+  if (fontSize) {
+    result.fontSize = `${Math.max(10, Math.min(15, Math.round(fontSize)))}px`;
+  }
+  if (horizontal) {
+    result.textAlign = horizontal;
+    if (horizontal === "center") {
+      result.justifyContent = "center";
+    }
+    if (horizontal === "right") {
+      result.justifyContent = "flex-end";
+    }
+  }
+  if (vertical) {
+    result.verticalAlign = vertical;
+    if (vertical === "top") {
+      result.alignItems = "flex-start";
+    }
+    if (vertical === "bottom") {
+      result.alignItems = "flex-end";
+    }
   }
   if (alignment.wrap_text) {
     result.whiteSpace = "normal";
@@ -248,7 +309,16 @@ function sheetToPreviewRow(sheet: WorkbookSheetPreview): WorkbookPreviewRow {
 
 function buildMergedLookup(sheet: WorkbookSheetPreview) {
   const covered = new Map<string, string>();
-  const masters = new Map<string, { range: string; rows: number; columns: number }>();
+  const masters = new Map<
+    string,
+    {
+      range: string;
+      rows: number;
+      columns: number;
+      startColumn: number;
+      endColumn: number;
+    }
+  >();
 
   for (const region of safeSyncRegions(sheet).merged) {
     if (
@@ -266,6 +336,8 @@ function buildMergedLookup(sheet: WorkbookSheetPreview) {
       range: region.range,
       rows: region.span.rows,
       columns: region.span.columns,
+      startColumn: region.start_column,
+      endColumn: region.end_column,
     });
     for (let row = region.start_row; row <= region.end_row; row += 1) {
       for (let column = region.start_column; column <= region.end_column; column += 1) {
@@ -288,6 +360,10 @@ function regionKindForSyncRow(sheet: WorkbookSheetPreview, regionIds: string[]) 
     .find((kind) => kind && kind !== "merged_cell_region") ?? null;
 }
 
+function regionKindForSyncCell(sheet: WorkbookSheetPreview, regionIds: string[]) {
+  return regionKindForSyncRow(sheet, regionIds);
+}
+
 function cellDisplayValue(
   cell: WorkbookCellPreview | undefined,
   address: string,
@@ -297,6 +373,16 @@ function cellDisplayValue(
     return edits[address] ?? "";
   }
   return cell?.formula ?? cell?.value ?? "";
+}
+
+function formatWorkbookCellValue(value: unknown) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "boolean") {
+    return value ? "TRUE" : "FALSE";
+  }
+  return String(value);
 }
 
 function buildSheetGridRows(
@@ -313,6 +399,7 @@ function buildSheetGridRows(
   const visibleColumns = safeSyncColumns(sheet)
     .filter((column) => !column.hidden)
     .slice(0, maxSheetPreviewColumns);
+  const visibleColumnNumbers = visibleColumns.map((column) => column.workbook_column);
   const safeRowHeights =
     sheet.structure && typeof sheet.structure === "object" && sheet.structure.row_heights
       ? sheet.structure.row_heights
@@ -334,6 +421,10 @@ function buildSheetGridRows(
       __editableFields: {},
       __readonlyReasons: {},
       __addresses: {},
+      __cellRegionKinds: {},
+      __formulaFields: {},
+      __mergeCovered: {},
+      __mergeSpans: {},
     };
 
     for (const syncColumn of visibleColumns) {
@@ -345,19 +436,15 @@ function buildSheetGridRows(
       const syncCell = syncCellMap.get(key);
       const isCovered = covered.has(key);
       const mergeMaster = masters.get(key);
-      const readonlyReason =
-        syncCell?.readonly_reason ??
-        (isCovered ? "merged_covered_cell" : syncRow.editable ? "" : `${syncRow.role}_region`);
-      const isEditable =
-        syncRow.editable &&
-        !isCovered &&
-        syncCell?.readonly_reason !== "formula" &&
-        syncCell?.readonly_reason !== "readonly_region" &&
-        syncCell?.readonly_reason !== "structural_region";
+      const readonlyReason = syncCell?.readonly_reason ?? "";
+      const isEditable = Boolean(syncCell?.editable);
+      const cellRegionKind = regionKindForSyncCell(sheet, syncCell?.region_ids ?? []);
 
       row[field] = isCovered ? "" : cellDisplayValue(cell, address, edits);
       row.__addresses[field] = address;
       row.__editableFields[field] = isEditable;
+      row.__cellRegionKinds[field] = cellRegionKind ?? row.__regionKind ?? "";
+      row.__formulaFields[field] = Boolean(syncCell?.has_formula || cell?.formula);
       if (readonlyReason) {
         row.__readonlyReasons[field] = readonlyReason;
       }
@@ -369,20 +456,35 @@ function buildSheetGridRows(
           ...row.__styles[field],
           background:
             row.__styles[field]?.background ??
-            "color-mix(in oklch, var(--primary) 6%, transparent)",
+            "color-mix(in oklch, var(--accent) 36%, transparent)",
         };
       }
       if (isCovered) {
+        row.__mergeCovered[field] = true;
         row.__styles[field] = {
           ...row.__styles[field],
           color: "transparent",
-          background: "color-mix(in oklch, var(--muted) 28%, transparent)",
+          background:
+            row.__styles[field]?.background ??
+            "color-mix(in oklch, var(--muted) 42%, transparent)",
         };
       }
       if (mergeMaster) {
+        const visibleSpanColumns = visibleColumnNumbers.filter(
+          (visibleColumn) =>
+            visibleColumn >= mergeMaster.startColumn && visibleColumn <= mergeMaster.endColumn,
+        ).length;
+        row.__mergeSpans[field] = {
+          range: mergeMaster.range,
+          rows: mergeMaster.rows,
+          columns: Math.max(1, visibleSpanColumns || mergeMaster.columns),
+        };
         row.__styles[field] = {
           ...row.__styles[field],
-          boxShadow: "inset 0 0 0 1px color-mix(in oklch, var(--primary) 35%, transparent)",
+          background:
+            row.__styles[field]?.background ??
+            "color-mix(in oklch, var(--secondary) 76%, transparent)",
+          boxShadow: "inset 0 0 0 1px color-mix(in oklch, var(--primary) 46%, transparent)",
           fontWeight: row.__styles[field]?.fontWeight ?? "650",
         };
       }
@@ -394,11 +496,29 @@ function buildSheetGridRows(
   return rows;
 }
 
-function workbookColumnWidth(width: number | null | undefined) {
-  if (!width) {
-    return 92;
-  }
-  return Math.max(56, Math.min(220, Math.round(width * 8)));
+function workbookRowHeight(height: number | null | undefined, fallback?: number | null) {
+  const points = height ?? fallback ?? defaultExcelRowHeight;
+  return Math.max(22, Math.min(144, Math.round(points * excelPointToPixelRatio) + 4));
+}
+
+function workbookColumnWidth(width: number | null | undefined, fallback?: number | null) {
+  const excelWidth = width ?? fallback ?? defaultExcelColumnWidth;
+  const pixels = Math.round(excelWidth * 7 + 8);
+  return Math.max(44, Math.min(360, pixels));
+}
+
+function frozenRowCount(sheet: WorkbookSheetPreview | null) {
+  const freezePanes = nestedRecord(sheet?.workbook_view?.freeze_panes);
+  const count = numberFromUnknown(freezePanes.frozen_rows);
+  return count ? Math.max(0, Math.min(maxSheetPreviewRows, count)) : 0;
+}
+
+function regionLabel(kind: string) {
+  return kind
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 export function WorkbookUploadPanel() {
@@ -453,12 +573,37 @@ export function WorkbookUploadPanel() {
     [result],
   );
 
+  const selectedRegionCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const region of selectedSheet?.regions ?? []) {
+      counts.set(region.kind, (counts.get(region.kind) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort(([left], [right]) => left.localeCompare(right));
+  }, [selectedSheet]);
+
+  const visibleMergedRanges = useMemo(
+    () => (selectedSheet?.structure?.merged_cells ?? []).slice(0, 8),
+    [selectedSheet],
+  );
+
   const sheetRows = useMemo(
     () =>
       selectedSheet
-        ? buildSheetGridRows(selectedSheet, workbookEditsRef.current[selectedSheet.name] ?? {})
+        ? buildSheetGridRows(selectedSheet, workbookEdits[selectedSheet.name] ?? {})
         : [],
-    [selectedSheet],
+    [selectedSheet, workbookEdits],
+  );
+
+  const frozenRows = useMemo(() => frozenRowCount(selectedSheet), [selectedSheet]);
+
+  const sheetPinnedTopRows = useMemo(
+    () => sheetRows.filter((row) => row.__rowNumber <= frozenRows),
+    [frozenRows, sheetRows],
+  );
+
+  const sheetBodyRows = useMemo(
+    () => sheetRows.filter((row) => row.__rowNumber > frozenRows),
+    [frozenRows, sheetRows],
   );
 
   const summaryColumnDefs = useMemo<ColDef<WorkbookPreviewRow>[]>(
@@ -487,10 +632,14 @@ export function WorkbookUploadPanel() {
       selectedSheet.structure && typeof selectedSheet.structure === "object"
         ? selectedSheet.structure.column_widths ?? {}
         : {};
+    const defaultColumnWidth =
+      selectedSheet.structure && typeof selectedSheet.structure === "object"
+        ? selectedSheet.structure.default_column_width
+        : null;
     const pinnedWorkbookColumns = new Set(
       syncColumns
         .filter((column) => column.frozen && !column.hidden)
-        .slice(0, 2)
+        .slice(0, 8)
         .map((column) => column.workbook_column),
     );
     const columns: ColDef<WorkbookGridRow>[] = [
@@ -502,6 +651,7 @@ export function WorkbookUploadPanel() {
         minWidth: 58,
         editable: false,
         sortable: false,
+        cellClass: "workbook-row-header-cell",
       },
     ];
 
@@ -511,13 +661,42 @@ export function WorkbookUploadPanel() {
       }
       const name = syncColumn.workbook_column_name || columnName(syncColumn.workbook_column);
       const field = syncColumn.grid_field;
+      const width = workbookColumnWidth(syncColumn.width ?? safeColumnWidths[name], defaultColumnWidth);
       columns.push({
         field,
         headerName: name,
-        minWidth: workbookColumnWidth(syncColumn.width ?? safeColumnWidths[name]),
+        width,
+        minWidth: Math.min(width, 72),
         pinned: pinnedWorkbookColumns.has(syncColumn.workbook_column) ? "left" : undefined,
         sortable: false,
         editable: (params) => Boolean(params.data?.__editableFields?.[field]),
+        colSpan: (params) => params.data?.__mergeSpans?.[field]?.columns ?? 1,
+        valueFormatter: (params) => formatWorkbookCellValue(params.value),
+        cellClass: (params) => {
+          const classes = ["workbook-cell"];
+          const kind = params.data?.__cellRegionKinds?.[field];
+          const readonlyReason = params.data?.__readonlyReasons?.[field];
+          if (kind) {
+            classes.push(`workbook-cell-${kind}`);
+          }
+          if (params.data?.__editableFields?.[field]) {
+            classes.push("workbook-cell-editable");
+          }
+          if (readonlyReason) {
+            classes.push("workbook-cell-readonly");
+            classes.push(`workbook-cell-readonly-${readonlyReason}`);
+          }
+          if (params.data?.__formulaFields?.[field]) {
+            classes.push("workbook-cell-formula");
+          }
+          if (params.data?.__mergeCovered?.[field]) {
+            classes.push("workbook-cell-merge-covered");
+          }
+          if (params.data?.__mergeSpans?.[field]) {
+            classes.push("workbook-cell-merge-master");
+          }
+          return classes;
+        },
         cellStyle: (params) => {
           const style = params.data?.__styles?.[field] ?? {};
           if (params.data?.__editableFields?.[field]) {
@@ -897,12 +1076,68 @@ export function WorkbookUploadPanel() {
                       </span>
                     </div>
                     <div className="flex justify-between gap-2">
+                      <span>Mapped cells</span>
+                      <span className="text-foreground">
+                        {selectedSheet.sync?.cells?.length ?? 0}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>Default row</span>
+                      <span className="text-foreground">
+                        {selectedSheet.structure?.default_row_height
+                          ? `${selectedSheet.structure.default_row_height} pt`
+                          : "Excel default"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>Default col</span>
+                      <span className="text-foreground">
+                        {selectedSheet.structure?.default_column_width
+                          ? selectedSheet.structure.default_column_width
+                          : "Excel default"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
                       <span>Layout ID</span>
                       <span className="max-w-28 truncate text-foreground">
                         {selectedSheet.sync?.layout_fingerprint ?? "—"}
                       </span>
                     </div>
                   </div>
+
+                  {selectedRegionCounts.length > 0 && (
+                    <div className="mt-3 border-t pt-3">
+                      <div className="text-xs font-medium text-muted-foreground">Regions</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {selectedRegionCounts.map(([kind, count]) => (
+                          <span
+                            className="rounded-sm border bg-background/70 px-1.5 py-1 text-[11px] text-foreground"
+                            key={kind}
+                          >
+                            {regionLabel(kind)}: {count}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {visibleMergedRanges.length > 0 && (
+                    <div className="mt-3 border-t pt-3">
+                      <div className="text-xs font-medium text-muted-foreground">
+                        Merged ranges
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {visibleMergedRanges.map((range) => (
+                          <span
+                            className="rounded-sm border bg-background/70 px-1.5 py-1 font-mono text-[11px] text-foreground"
+                            key={range}
+                          >
+                            {range}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="ag-theme-quartz h-48 w-full">
@@ -922,7 +1157,7 @@ export function WorkbookUploadPanel() {
                 </div>
               </div>
 
-              <div className="ag-theme-quartz relative h-[28rem] w-full">
+              <div className="ag-theme-quartz workbook-reconstruction-grid relative h-[32rem] w-full">
                 {isSelectedSheetDegraded && sheetRows.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center rounded-md border border-dashed bg-background/40 px-6 text-center">
                     <p className="text-sm font-medium text-foreground">
@@ -944,27 +1179,48 @@ export function WorkbookUploadPanel() {
                       suppressHeaderMenuButton: true,
                     }}
                     getRowHeight={(params) =>
-                      params.data?.__height ? Math.max(22, Math.min(76, params.data.__height)) : 26
+                      workbookRowHeight(
+                        params.data?.__height,
+                        selectedSheet.structure?.default_row_height ?? null,
+                      )
                     }
                     getRowId={(params) => params.data.id}
                     getRowStyle={(params) => {
                       if (params.data?.__regionKind === "summary_band") {
                         const style: RowStyle = {
-                          background: "color-mix(in oklch, var(--muted) 68%, transparent)",
+                          background: "color-mix(in oklch, var(--accent) 38%, transparent)",
                           fontWeight: "700",
                         };
                         return style;
                       }
-                      if (params.data?.__regionKind === "readonly_band") {
+                      if (
+                        params.data?.__regionKind === "readonly_band" ||
+                        params.data?.__regionKind === "formula_row"
+                      ) {
                         const style: RowStyle = {
                           background: "color-mix(in oklch, var(--muted) 36%, transparent)",
                         };
                         return style;
                       }
-                      if (params.data?.__regionKind === "grouped_section") {
+                      if (
+                        params.data?.__regionKind === "grouped_section" ||
+                        params.data?.__regionKind === "section_header"
+                      ) {
                         const style: RowStyle = {
-                          background: "color-mix(in oklch, var(--secondary) 76%, transparent)",
+                          background: "color-mix(in oklch, var(--primary) 10%, transparent)",
                           fontWeight: "700",
+                        };
+                        return style;
+                      }
+                      if (params.data?.__regionKind === "footer_region") {
+                        const style: RowStyle = {
+                          background: "color-mix(in oklch, var(--secondary) 70%, transparent)",
+                        };
+                        return style;
+                      }
+                      if (params.data?.__regionKind === "worksheet_separator") {
+                        const style: RowStyle = {
+                          background: "color-mix(in oklch, var(--border) 36%, transparent)",
                         };
                         return style;
                       }
@@ -983,10 +1239,12 @@ export function WorkbookUploadPanel() {
                       readOnlyEdit: true,
                       suppressColumnVirtualisation: false,
                       suppressScrollOnNewData: true,
+                      columnHoverHighlight: true,
                       rowBuffer: 20,
                     }}
                     onCellEditRequest={handleWorkbookCellEdit}
-                    rowData={sheetRows}
+                    pinnedTopRowData={sheetPinnedTopRows}
+                    rowData={sheetBodyRows}
                     theme="legacy"
                   />
                 )}

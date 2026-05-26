@@ -206,6 +206,9 @@ class WorkbookSheetStructure(BaseModel):
     merged_cells: list[str]
     row_heights: dict[str, float]
     column_widths: dict[str, float]
+    default_row_height: float | None = None
+    default_column_width: float | None = None
+    sheet_format: JsonObject = Field(default_factory=dict)
     hidden_rows: list[int]
     hidden_columns: list[str]
     freeze_panes: str | None

@@ -149,11 +149,47 @@ def _safe_export_filename(original: str) -> str:
     return f"{base}-edited.xlsx"
 
 
+def _editable_address_lookup(metadata: dict[str, Any] | None) -> dict[str, set[str]] | None:
+    """Build a sheet -> editable addresses map from stored workbook sync metadata."""
+
+    if not isinstance(metadata, dict):
+        return None
+
+    sheets = metadata.get("sheets")
+    if not isinstance(sheets, list):
+        return None
+
+    lookup: dict[str, set[str]] = {}
+    found_sync = False
+    for sheet in sheets:
+        if not isinstance(sheet, dict):
+            continue
+        sheet_name = sheet.get("name")
+        sync = sheet.get("sync")
+        if not isinstance(sheet_name, str) or not isinstance(sync, dict):
+            continue
+        cells = sync.get("cells")
+        if not isinstance(cells, list):
+            continue
+        found_sync = True
+        editable_addresses: set[str] = set()
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            address = cell.get("address")
+            if isinstance(address, str) and cell.get("editable") is True:
+                editable_addresses.add(address.upper())
+        lookup[sheet_name] = editable_addresses
+
+    return lookup if found_sync else None
+
+
 def _apply_sheet_edits(
     workbook: Any,
     *,
     sheet_name: str,
     edits: dict[str, Any],
+    editable_addresses: set[str] | None,
     summary: dict[str, Any],
 ) -> None:
     if sheet_name not in workbook.sheetnames:
@@ -181,9 +217,16 @@ def _apply_sheet_edits(
         except ValueError as exc:
             sheet_summary["skipped"].append({"address": raw_address, "reason": str(exc)})
             continue
+        normalized_address = f"{column_letters}{row_number}"
+
+        if editable_addresses is not None and normalized_address not in editable_addresses:
+            sheet_summary["skipped"].append(
+                {"address": raw_address, "reason": "not_editable_by_sync"}
+            )
+            continue
 
         try:
-            cell = sheet[f"{column_letters}{row_number}"]
+            cell = sheet[normalized_address]
         except Exception as exc:  # noqa: BLE001 - openpyxl can raise various errors
             sheet_summary["skipped"].append(
                 {"address": raw_address, "reason": f"cell_lookup_error:{type(exc).__name__}"}
@@ -204,7 +247,7 @@ def _apply_sheet_edits(
         coerced = _coerce_value(raw_value)
         cell.value = coerced
         sheet_summary["applied"] += 1
-        sheet_summary["patched_cells"].append(raw_address)
+        sheet_summary["patched_cells"].append(normalized_address)
 
 
 def export_uploaded_workbook(
@@ -235,6 +278,8 @@ def export_uploaded_workbook(
         "missing_sheets": [],
         "total_edits_received": 0,
     }
+    editable_lookup = _editable_address_lookup(uploaded_file.metadata_)
+    summary["sync_validated"] = editable_lookup is not None
 
     try:
         workbook = load_workbook(storage_path, data_only=False, keep_vba=False)
@@ -265,6 +310,9 @@ def export_uploaded_workbook(
                 workbook,
                 sheet_name=sheet_name,
                 edits=sheet_edits,
+                editable_addresses=(
+                    editable_lookup.get(sheet_name) if editable_lookup is not None else None
+                ),
                 summary=summary,
             )
 

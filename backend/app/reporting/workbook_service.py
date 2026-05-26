@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from uuid import uuid4
@@ -63,10 +64,12 @@ async def save_and_parse_workbook_upload(
     storage_path = storage_root / stored_filename
 
     total_bytes = 0
+    checksum = hashlib.sha256()
     try:
         with storage_path.open("wb") as output:
             while chunk := await file.read(CHUNK_SIZE_BYTES):
                 total_bytes += len(chunk)
+                checksum.update(chunk)
                 output.write(chunk)
     finally:
         await file.close()
@@ -92,6 +95,39 @@ async def save_and_parse_workbook_upload(
             detail="Unable to parse XLSX workbook.",
         ) from exc
 
+    checksum_sha256 = checksum.hexdigest()
+    workbook_metadata = {
+        **workbook_metadata,
+        "workbook_source": {
+            "original_filename": safe_filename,
+            "stored_filename": stored_filename,
+            "storage_bucket": "local",
+            "storage_path": str(storage_path.relative_to(storage_root.parent)),
+            "content_type": file.content_type,
+            "file_size_bytes": total_bytes,
+            "checksum_sha256": checksum_sha256,
+        },
+        "workbook_geometry": {
+            "sheets": [
+                {
+                    "name": sheet.get("name"),
+                    "dimension": sheet.get("dimension"),
+                    "max_row": sheet.get("max_row"),
+                    "max_column": sheet.get("max_column"),
+                    "merged_cells": sheet.get("structure", {}).get("merged_cells", []),
+                    "freeze_panes": sheet.get("structure", {}).get("freeze_panes"),
+                    "row_heights": sheet.get("structure", {}).get("row_heights", {}),
+                    "column_widths": sheet.get("structure", {}).get("column_widths", {}),
+                    "default_row_height": sheet.get("structure", {}).get("default_row_height"),
+                    "default_column_width": sheet.get("structure", {}).get(
+                        "default_column_width"
+                    ),
+                }
+                for sheet in workbook_metadata.get("sheets", [])
+            ]
+        },
+    }
+
     uploaded_file = UploadedFile(
         uploaded_by_user_id=actor.id,
         original_filename=safe_filename,
@@ -99,6 +135,7 @@ async def save_and_parse_workbook_upload(
         storage_path=str(storage_path.relative_to(storage_root.parent)),
         content_type=file.content_type,
         file_size_bytes=total_bytes,
+        checksum_sha256=checksum_sha256,
         status=UploadedFileStatus.PROCESSED.value,
         metadata_=workbook_metadata,
     )
@@ -129,6 +166,7 @@ async def save_and_parse_workbook_upload(
                 "original_filename": safe_filename,
                 "sheet_count": workbook_metadata["sheet_count"],
                 "file_size_bytes": total_bytes,
+                "checksum_sha256": checksum_sha256,
                 "workbook_sync": workbook_metadata.get("workbook_sync", {}),
             },
         )
