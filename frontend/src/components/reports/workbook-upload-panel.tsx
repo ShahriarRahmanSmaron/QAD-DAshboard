@@ -9,7 +9,7 @@ import {
   type RowStyle,
 } from "ag-grid-community";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bug, Download, FileSpreadsheet, Loader2, Upload, X } from "lucide-react";
+import { Bug, Database, Download, FileSpreadsheet, Layers3, Loader2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +20,9 @@ import {
 } from "@/lib/reports/api";
 import type {
   WorkbookCellPreview,
+  WorkbookSemanticFact,
+  WorkbookSemanticMapping,
+  WorkbookSemanticRegion,
   WorkbookSheetPreview,
   WorkbookUploadResponse,
 } from "@/lib/reports/types";
@@ -55,6 +58,8 @@ type WorkbookGridRow = {
   __formulaFields: Record<string, boolean>;
   __mergeCovered: Record<string, boolean>;
   __mergeSpans: Record<string, WorkbookMergeSpan>;
+  __semanticFields: Record<string, boolean>;
+  __semanticLabels: Record<string, string>;
   [field: string]: unknown;
 };
 
@@ -415,12 +420,63 @@ function formatWorkbookCellValue(value: unknown) {
   return String(value);
 }
 
+function asSemanticMapping(
+  mapping: WorkbookSemanticMapping | undefined,
+): WorkbookSemanticMapping | null {
+  if (!mapping || typeof mapping !== "object") {
+    return null;
+  }
+  return mapping;
+}
+
+function formatSemanticNumber(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return String(value);
+  }
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(numeric);
+}
+
+function formatSemanticFactValue(fact: WorkbookSemanticFact) {
+  if (fact.value_type === "number") {
+    return formatSemanticNumber(fact.value_numeric) ?? "";
+  }
+  if (fact.value_type === "date") {
+    return fact.value_date ?? "";
+  }
+  if (fact.value_type === "boolean") {
+    return fact.value_boolean ? "TRUE" : "FALSE";
+  }
+  if (fact.is_formula) {
+    return fact.formula ?? "Formula";
+  }
+  return fact.value_text ?? "";
+}
+
+function semanticFactTitle(fact: WorkbookSemanticFact) {
+  const parts = [
+    fact.metric_label,
+    fact.buyer,
+    fact.unit,
+    fact.report_date,
+    fact.operational_row_label,
+  ].filter(Boolean);
+  return parts.join(" / ");
+}
+
 function buildSheetGridRows(
   sheet: WorkbookSheetPreview,
   edits: WorkbookSheetEditMap,
+  semanticFacts: WorkbookSemanticFact[] = [],
 ): WorkbookSheetGridResult {
   const sheetCells = safeSheetCells(sheet);
   const cellMap = new Map(sheetCells.map((cell) => [`${cell.row}:${cell.column}`, cell]));
+  const semanticFactByAddress = new Map(
+    semanticFacts.map((fact) => [fact.source_cell_address, fact]),
+  );
   const syncCellMap = new Map(
     safeSyncCells(sheet).map((cell) => [`${cell.workbook_row}:${cell.workbook_column}`, cell]),
   );
@@ -500,6 +556,8 @@ function buildSheetGridRows(
       __formulaFields: {},
       __mergeCovered: {},
       __mergeSpans: {},
+      __semanticFields: {},
+      __semanticLabels: {},
     };
 
     for (const syncColumn of visibleColumns) {
@@ -515,6 +573,7 @@ function buildSheetGridRows(
       const isEditable = Boolean(syncCell?.editable);
       const cellRegionKind = regionKindForSyncCell(sheet, syncCell?.region_ids ?? []);
       const orphan = orphanMasterByVisibleKey.get(key);
+      const semanticFact = semanticFactByAddress.get(address);
 
       // Resolve the visible value for this cell. Covered cells normally
       // render as blank, but if they are the first visible covered cell of
@@ -539,6 +598,10 @@ function buildSheetGridRows(
       row.__editableFields[field] = isEditable;
       row.__cellRegionKinds[field] = cellRegionKind ?? row.__regionKind ?? "";
       row.__formulaFields[field] = Boolean(syncCell?.has_formula || cell?.formula);
+      if (semanticFact) {
+        row.__semanticFields[field] = true;
+        row.__semanticLabels[field] = semanticFactTitle(semanticFact);
+      }
       if (readonlyReason) {
         row.__readonlyReasons[field] = readonlyReason;
       }
@@ -831,6 +894,163 @@ function ReconstructionDiagnosticsPanel({
   );
 }
 
+type SemanticBreakdownPanelProps = {
+  mapping: WorkbookSemanticMapping;
+  selectedSheet: WorkbookSheetPreview;
+  selectedFacts: WorkbookSemanticFact[];
+  selectedRegions: WorkbookSemanticRegion[];
+  showSemanticOverlay: boolean;
+  onToggleSemanticOverlay: () => void;
+};
+
+function SemanticBreakdownPanel({
+  mapping,
+  selectedSheet,
+  selectedFacts,
+  selectedRegions,
+  showSemanticOverlay,
+  onToggleSemanticOverlay,
+}: SemanticBreakdownPanelProps) {
+  const metricCount = new Set(mapping.facts.map((fact) => fact.metric_key)).size;
+  const buyerCount = new Set(mapping.facts.map((fact) => fact.buyer).filter(Boolean)).size;
+  const unitCount = new Set(mapping.facts.map((fact) => fact.unit).filter(Boolean)).size;
+  const formulaCount = mapping.facts.filter((fact) => fact.is_formula).length;
+  const summaryRows = [...(mapping.summary?.rows ?? [])]
+    .sort((left, right) => {
+      const leftTotal = Number(left.numeric_total ?? 0);
+      const rightTotal = Number(right.numeric_total ?? 0);
+      return rightTotal - leftTotal;
+    })
+    .slice(0, 8);
+
+  return (
+    <div className="rounded-md border bg-background/55 p-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-foreground">
+            Semantic mapping - {selectedSheet.name}
+          </div>
+          <div className="mt-0.5 text-muted-foreground">
+            {mapping.fact_count} facts across {mapping.semantic_region_count} mapped regions
+          </div>
+        </div>
+        <Button
+          aria-pressed={showSemanticOverlay}
+          onClick={onToggleSemanticOverlay}
+          type="button"
+          variant={showSemanticOverlay ? "default" : "outline"}
+        >
+          <Layers3 className="size-4" />
+          {showSemanticOverlay ? "Hide overlay" : "Show overlay"}
+        </Button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+        {[
+          ["Facts", mapping.fact_count],
+          ["Regions", selectedRegions.length],
+          ["Metrics", metricCount],
+          ["Buyers", buyerCount],
+          ["Units", unitCount],
+        ].map(([label, value]) => (
+          <div className="rounded-md border bg-card/60 px-2 py-1.5" key={label}>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              {label}
+            </div>
+            <div className="mt-0.5 text-base font-semibold tabular-nums">{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+        <div className="rounded-md border bg-background/60 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Mapped sections
+            </div>
+            {formulaCount > 0 && (
+              <span className="rounded-sm border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                {formulaCount} formula
+              </span>
+            )}
+          </div>
+          <div className="mt-2 grid gap-1.5">
+            {selectedRegions.length > 0 ? (
+              selectedRegions.slice(0, 10).map((region) => (
+                <div
+                  className="flex items-center justify-between gap-2 rounded-sm border bg-card/50 px-2 py-1.5"
+                  key={region.id}
+                >
+                  <span className="min-w-0 truncate text-foreground">
+                    {region.section_label}
+                  </span>
+                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                    {region.range} / {region.fact_count}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-sm border border-dashed px-2 py-2 text-muted-foreground">
+                No mapped sections on this sheet.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-md border bg-background/60 p-2">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Extracted values
+          </div>
+          <div className="mt-2 grid gap-1.5">
+            {selectedFacts.length > 0 ? (
+              selectedFacts.slice(0, 12).map((fact) => (
+                <div
+                  className="grid grid-cols-[4.75rem_minmax(0,1fr)_auto] items-center gap-2 rounded-sm border bg-card/50 px-2 py-1.5"
+                  key={fact.source_key}
+                >
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    {fact.source_cell_address}
+                  </span>
+                  <span className="min-w-0 truncate text-foreground">
+                    {fact.metric_label}
+                    {fact.buyer ? ` / ${fact.buyer}` : ""}
+                    {fact.unit ? ` / ${fact.unit}` : ""}
+                  </span>
+                  <span className="text-right font-semibold tabular-nums">
+                    {formatSemanticFactValue(fact)}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-sm border border-dashed px-2 py-2 text-muted-foreground">
+                No operational values mapped for this sheet.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {summaryRows.length > 0 && (
+        <div className="mt-3 border-t pt-2">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Workbook totals
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {summaryRows.map((row) => (
+              <span
+                className="rounded-sm border bg-background/70 px-1.5 py-1 text-[11px] text-foreground"
+                key={`${row.metric_key}-${row.buyer ?? ""}-${row.unit ?? ""}-${row.report_date ?? ""}`}
+              >
+                {row.metric_label}: {formatSemanticNumber(row.numeric_total) ?? row.fact_count}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WorkbookUploadPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -846,6 +1066,8 @@ export function WorkbookUploadPanel() {
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showRegionOverlay, setShowRegionOverlay] = useState(false);
+  const [showSemanticPanel, setShowSemanticPanel] = useState(false);
+  const [showSemanticOverlay, setShowSemanticOverlay] = useState(false);
 
   const selectedSheet = useMemo(
     () =>
@@ -879,6 +1101,25 @@ export function WorkbookUploadPanel() {
   }, [result]);
 
   const isSelectedSheetDegraded = isSheetDegraded(selectedSheet);
+  const semanticMapping = asSemanticMapping(result?.metadata.semantic_mapping);
+  const semanticFacts = useMemo(
+    () => semanticMapping?.facts ?? [],
+    [semanticMapping],
+  );
+  const selectedSheetSemanticFacts = useMemo(
+    () =>
+      selectedSheet
+        ? semanticFacts.filter((fact) => fact.source_sheet_name === selectedSheet.name)
+        : [],
+    [selectedSheet, semanticFacts],
+  );
+  const selectedSheetSemanticRegions = useMemo(
+    () =>
+      selectedSheet && semanticMapping?.regions
+        ? semanticMapping.regions.filter((region) => region.sheet_name === selectedSheet.name)
+        : [],
+    [selectedSheet, semanticMapping],
+  );
 
   const previewRows = useMemo(
     () => result?.metadata.sheets.map(sheetToPreviewRow) ?? [],
@@ -901,9 +1142,13 @@ export function WorkbookUploadPanel() {
   const sheetGridResult = useMemo(
     () =>
       selectedSheet
-        ? buildSheetGridRows(selectedSheet, workbookEdits[selectedSheet.name] ?? {})
+        ? buildSheetGridRows(
+            selectedSheet,
+            workbookEdits[selectedSheet.name] ?? {},
+            selectedSheetSemanticFacts,
+          )
         : { rows: [] as WorkbookGridRow[], stats: null as WorkbookSheetReconstructionStats | null },
-    [selectedSheet, workbookEdits],
+    [selectedSheet, workbookEdits, selectedSheetSemanticFacts],
   );
   const sheetRows = sheetGridResult.rows;
   const sheetStats = sheetGridResult.stats;
@@ -1009,8 +1254,12 @@ export function WorkbookUploadPanel() {
           if (params.data?.__mergeSpans?.[field]) {
             classes.push("workbook-cell-merge-master");
           }
+          if (params.data?.__semanticFields?.[field]) {
+            classes.push("workbook-cell-semantic");
+          }
           return classes;
         },
+        tooltipValueGetter: (params) => params.data?.__semanticLabels?.[field] ?? undefined,
         cellStyle: (params) => {
           const style = params.data?.__styles?.[field] ?? {};
           if (params.data?.__editableFields?.[field]) {
@@ -1038,12 +1287,15 @@ export function WorkbookUploadPanel() {
     setResult(null);
     setSelectedSheetName("");
     setWorkbookEdits({});
+    setShowSemanticPanel(false);
+    setShowSemanticOverlay(false);
     setProgress(4);
     setIsUploading(true);
     try {
       const response = await uploadWorkbook(file, setProgress);
       setResult(response);
       setSelectedSheetName(response.metadata.sheets[0]?.name ?? "");
+      setShowSemanticPanel(Boolean(response.metadata.semantic_mapping?.fact_count));
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Workbook upload failed.");
     } finally {
@@ -1144,6 +1396,22 @@ export function WorkbookUploadPanel() {
         <div className="flex items-center gap-2">
           {result && (
             <>
+              {semanticMapping && (
+                <Button
+                  aria-label={
+                    showSemanticPanel
+                      ? "Hide semantic workbook mapping"
+                      : "Show semantic workbook mapping"
+                  }
+                  onClick={() => setShowSemanticPanel((prev) => !prev)}
+                  title="Toggle semantic workbook mapping"
+                  type="button"
+                  variant={showSemanticPanel ? "default" : "outline"}
+                >
+                  <Database className="size-4" />
+                  Semantic
+                </Button>
+              )}
               <Button
                 aria-label={
                   showDiagnostics
@@ -1187,6 +1455,8 @@ export function WorkbookUploadPanel() {
                   setExportStatus(null);
                   setShowDiagnostics(false);
                   setShowRegionOverlay(false);
+                  setShowSemanticPanel(false);
+                  setShowSemanticOverlay(false);
                 }}
                 type="button"
                 variant="outline"
@@ -1336,7 +1606,7 @@ export function WorkbookUploadPanel() {
                   </div>
                 </div>
               )}
-              <div className="grid gap-2 text-sm sm:grid-cols-4">
+              <div className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-5">
                 <div className="rounded-md border bg-background/55 px-3 py-2">
                   <div className="text-xs text-muted-foreground">Workbook</div>
                   <div className="mt-1 truncate font-medium">{result.original_filename}</div>
@@ -1356,6 +1626,10 @@ export function WorkbookUploadPanel() {
                       ? `${totalEditCount} cell${totalEditCount === 1 ? "" : "s"} / ${editedSheetCount} sheet${editedSheetCount === 1 ? "" : "s"}`
                       : "None"}
                   </div>
+                </div>
+                <div className="rounded-md border bg-background/55 px-3 py-2">
+                  <div className="text-xs text-muted-foreground">Semantic facts</div>
+                  <div className="mt-1 font-medium">{semanticMapping?.fact_count ?? 0}</div>
                 </div>
               </div>
 
@@ -1410,6 +1684,10 @@ export function WorkbookUploadPanel() {
                       <span className="text-foreground">
                         {selectedSheet.sync?.cells?.length ?? 0}
                       </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>Semantic cells</span>
+                      <span className="text-foreground">{selectedSheetSemanticFacts.length}</span>
                     </div>
                     <div className="flex justify-between gap-2">
                       <span>Default row</span>
@@ -1487,6 +1765,17 @@ export function WorkbookUploadPanel() {
                 </div>
               </div>
 
+              {showSemanticPanel && semanticMapping && (
+                <SemanticBreakdownPanel
+                  mapping={semanticMapping}
+                  selectedFacts={selectedSheetSemanticFacts}
+                  selectedRegions={selectedSheetSemanticRegions}
+                  selectedSheet={selectedSheet}
+                  showSemanticOverlay={showSemanticOverlay}
+                  onToggleSemanticOverlay={() => setShowSemanticOverlay((prev) => !prev)}
+                />
+              )}
+
               {showDiagnostics && (
                 <ReconstructionDiagnosticsPanel
                   sheet={selectedSheet}
@@ -1501,6 +1790,7 @@ export function WorkbookUploadPanel() {
                 className={cn(
                   "ag-theme-quartz workbook-reconstruction-grid relative h-[32rem] w-full",
                   showRegionOverlay && "workbook-reconstruction-debug-overlay",
+                  showSemanticOverlay && "workbook-semantic-overlay",
                 )}
               >
                 {isSelectedSheetDegraded && sheetRows.length === 0 ? (

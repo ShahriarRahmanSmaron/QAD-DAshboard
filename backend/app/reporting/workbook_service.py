@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.reporting.models import AuditLog, UploadedFile, UploadedFileStatus
 from app.reporting.schemas import WorkbookParsePreview, WorkbookUploadResponse
 from app.reporting.workbook_parser import parse_xlsx_workbook
+from app.reporting.workbook_semantics import persist_workbook_semantics
 
 CHUNK_SIZE_BYTES = 1024 * 1024
 ALLOWED_XLSX_CONTENT_TYPES = {
@@ -152,6 +153,13 @@ async def save_and_parse_workbook_upload(
         },
     }
     uploaded_file.metadata_ = workbook_metadata
+    semantic_extraction = await persist_workbook_semantics(
+        session,
+        uploaded_file=uploaded_file,
+        actor=actor,
+        workbook_metadata=workbook_metadata,
+    )
+    workbook_metadata = uploaded_file.metadata_
 
     session.add(
         AuditLog(
@@ -168,6 +176,8 @@ async def save_and_parse_workbook_upload(
                 "file_size_bytes": total_bytes,
                 "checksum_sha256": checksum_sha256,
                 "workbook_sync": workbook_metadata.get("workbook_sync", {}),
+                "semantic_fact_count": len(semantic_extraction.facts),
+                "semantic_region_count": len(semantic_extraction.regions),
             },
         )
     )

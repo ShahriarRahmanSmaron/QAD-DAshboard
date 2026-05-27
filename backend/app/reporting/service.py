@@ -11,6 +11,8 @@ from app.auth.schemas import AuthUser
 from app.reporting import repository
 from app.reporting.models import (
     AuditLog,
+    OperationalFact,
+    OperationalValueType,
     Report,
     ReportMetric,
     ReportRow,
@@ -19,6 +21,8 @@ from app.reporting.models import (
 )
 from app.reporting.schemas import (
     BulkReportSaveRequest,
+    OperationalFactResponse,
+    OperationalSummaryRow,
     ReportCreateRequest,
     ReportMetricCreateRequest,
     ReportMetricResponse,
@@ -72,6 +76,62 @@ def serialize_metric(metric: ReportMetric) -> ReportMetricResponse:
         metadata=metric.metadata_,
         created_at=metric.created_at,
         updated_at=metric.updated_at,
+    )
+
+
+def serialize_operational_fact(fact: OperationalFact) -> OperationalFactResponse:
+    return OperationalFactResponse(
+        id=fact.id,
+        uploaded_file_id=fact.uploaded_file_id,
+        report_id=fact.report_id,
+        buyer_id=fact.buyer_id,
+        unit_id=fact.unit_id,
+        buyer=fact.buyer,
+        unit=fact.unit,
+        report_date=fact.report_date,
+        metric_key=fact.metric_key,
+        metric_label=fact.metric_label,
+        operational_section=fact.operational_section,
+        operational_section_label=fact.operational_section_label,
+        operational_row_key=fact.operational_row_key,
+        operational_row_label=fact.operational_row_label,
+        column_label=fact.column_label,
+        value_type=OperationalValueType(fact.value_type),
+        value_numeric=fact.value_numeric,
+        value_text=fact.value_text,
+        value_date=fact.value_date,
+        value_boolean=fact.value_boolean,
+        unit_of_measure=fact.unit_of_measure,
+        is_formula=fact.is_formula,
+        formula=fact.formula,
+        calculated_state=fact.calculated_state,
+        source_sheet_name=fact.source_sheet_name,
+        source_sheet_index=fact.source_sheet_index,
+        source_cell_address=fact.source_cell_address,
+        source_row_number=fact.source_row_number,
+        source_column_number=fact.source_column_number,
+        source_region_id=fact.source_region_id,
+        source_region_kind=fact.source_region_kind,
+        source_region_range=fact.source_region_range,
+        workbook_sheet_identity=fact.workbook_sheet_identity,
+        workbook_source=fact.workbook_source,
+        metadata=fact.metadata_,
+        created_at=fact.created_at,
+        updated_at=fact.updated_at,
+    )
+
+
+def serialize_operational_summary_row(row: dict[str, Any]) -> OperationalSummaryRow:
+    return OperationalSummaryRow(
+        metric_key=row["metric_key"],
+        metric_label=row["metric_label"],
+        operational_section=row["operational_section"],
+        buyer=row.get("buyer"),
+        unit=row.get("unit"),
+        report_date=row.get("report_date"),
+        fact_count=row.get("fact_count", 0),
+        numeric_total=row.get("numeric_total"),
+        formula_count=row.get("formula_count", 0),
     )
 
 

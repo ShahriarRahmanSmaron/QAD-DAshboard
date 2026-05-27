@@ -43,7 +43,10 @@ class RequestInstrumentationMiddleware(BaseHTTPMiddleware):
         }
 
         if duration_ms >= self.slow_threshold_ms:
-            logger.warning("slow request: %(method)s %(path)s %(status)s %(duration_ms).1fms", log_data)
+            logger.warning(
+                "slow request: %(method)s %(path)s %(status)s %(duration_ms).1fms",
+                log_data,
+            )
         else:
             logger.info("%(method)s %(path)s %(status)s %(duration_ms).1fms", log_data)
 

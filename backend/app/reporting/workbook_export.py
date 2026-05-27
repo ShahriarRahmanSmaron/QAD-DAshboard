@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.schemas import AuthUser
 from app.core.config import settings
 from app.reporting.models import AuditLog, UploadedFile
+from app.reporting.workbook_semantics import sync_workbook_semantics_after_export
 
 logger = logging.getLogger("app.reporting.workbook_export")
 
@@ -263,7 +264,7 @@ def export_uploaded_workbook(
     """
 
     try:
-        from openpyxl import load_workbook
+        from openpyxl import load_workbook  # type: ignore[import-untyped]
     except ImportError as exc:  # pragma: no cover - dependency guard
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -379,6 +380,13 @@ async def export_workbook_for_user(
         uploaded_file=uploaded_file,
         edits=edits,
     )
+    semantic_sync = await sync_workbook_semantics_after_export(
+        session,
+        uploaded_file=uploaded_file,
+        actor=actor,
+        edits=edits,
+        export_summary=summary,
+    )
 
     session.add(
         AuditLog(
@@ -401,6 +409,9 @@ async def export_workbook_for_user(
                     if info.get("applied", 0) > 0
                 ),
                 "missing_sheets": summary.get("missing_sheets", []),
+                "semantic_fact_count": (
+                    len(semantic_sync.facts) if semantic_sync is not None else None
+                ),
             },
         )
     )

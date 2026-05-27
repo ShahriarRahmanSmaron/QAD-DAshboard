@@ -255,3 +255,11 @@ body {
   outline: 1px dotted color-mix(in oklch, var(--primary) 35%, transparent);
   outline-offset: -1px;
 }
+
+.workbook-semantic-overlay .workbook-cell-semantic {
+  outline: 2px solid color-mix(in oklch, var(--accent) 72%, var(--primary));
+  outline-offset: -2px;
+  box-shadow:
+    inset 0 -2px 0 color-mix(in oklch, var(--accent) 84%, transparent),
+    inset 2px 0 0 color-mix(in oklch, var(--primary) 45%, transparent);
+}

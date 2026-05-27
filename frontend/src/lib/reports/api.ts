@@ -1,6 +1,8 @@
 import type {
   BulkReportSavePayload,
   BuyerListResponse,
+  OperationalFactListResponse,
+  OperationalSummaryResponse,
   Report,
   ReportCreatePayload,
   ReportListResponse,
@@ -12,6 +14,7 @@ import type {
   ReportWorkflowAction,
   ReportTypeListResponse,
   UnitListResponse,
+  WorkbookSemanticBreakdownResponse,
   WorkbookUploadResponse,
 } from "@/lib/reports/types";
 
@@ -112,6 +115,70 @@ export function listUnits() {
 
 export function listReportTypes() {
   return request<ReportTypeListResponse>("/api/report-types");
+}
+
+export type OperationalQueryParams = {
+  uploaded_file_id?: string;
+  buyer?: string;
+  unit?: string;
+  metric?: string;
+  report_date?: string;
+  page?: number;
+  page_size?: number;
+};
+
+function operationalParams(params: OperationalQueryParams = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") {
+      continue;
+    }
+    query.set(key, String(value));
+  }
+  return query.toString();
+}
+
+export function listOperationalFacts(params: OperationalQueryParams = {}) {
+  const query = operationalParams(params);
+  return request<OperationalFactListResponse>(
+    `/api/reports/operations/facts${query ? `?${query}` : ""}`,
+  );
+}
+
+export function listOperationalFactsByBuyer(
+  buyer: string,
+  params: Omit<OperationalQueryParams, "buyer"> = {},
+) {
+  return listOperationalFacts({ ...params, buyer });
+}
+
+export function listOperationalFactsByUnit(
+  unit: string,
+  params: Omit<OperationalQueryParams, "unit"> = {},
+) {
+  return listOperationalFacts({ ...params, unit });
+}
+
+export function listOperationalMetricHistory(
+  metric: string,
+  params: Omit<OperationalQueryParams, "metric"> = {},
+) {
+  return listOperationalFacts({ ...params, metric });
+}
+
+export function getOperationalSummary(
+  params: Omit<OperationalQueryParams, "page" | "page_size"> = {},
+) {
+  const query = operationalParams(params);
+  return request<OperationalSummaryResponse>(
+    `/api/reports/operations/summary${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getWorkbookSemantics(uploadedFileId: string) {
+  return request<WorkbookSemanticBreakdownResponse>(
+    `/api/reports/workbooks/${uploadedFileId}/semantics`,
+  );
 }
 
 export function uploadWorkbook(

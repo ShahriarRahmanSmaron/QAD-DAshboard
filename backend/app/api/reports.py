@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 from uuid import UUID
 
@@ -12,6 +13,8 @@ from app.db.session import get_db_session
 from app.reporting import repository
 from app.reporting.schemas import (
     BulkReportSaveRequest,
+    OperationalFactListResponse,
+    OperationalSummaryResponse,
     ReportCreateRequest,
     ReportListResponse,
     ReportMetricCreateRequest,
@@ -21,6 +24,8 @@ from app.reporting.schemas import (
     ReportRowResponse,
     ReportSummaryListResponse,
     WorkbookExportRequest,
+    WorkbookSemanticBreakdownResponse,
+    WorkbookSemanticRegionResponse,
     WorkbookUploadResponse,
 )
 from app.reporting.service import (
@@ -29,6 +34,8 @@ from app.reporting.service import (
     create_report_metric,
     create_report_row,
     serialize_metric,
+    serialize_operational_fact,
+    serialize_operational_summary_row,
     serialize_report,
     serialize_report_summary,
     serialize_row,
@@ -83,6 +90,185 @@ async def list_report_summaries(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get("/operations/facts", response_model=OperationalFactListResponse)
+async def list_operational_facts(
+    session: SessionDep,
+    user: ReportReaderDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=500)] = 50,
+    uploaded_file_id: UUID | None = None,
+    buyer: str | None = None,
+    unit: str | None = None,
+    metric: str | None = None,
+    report_date: date | None = None,
+) -> OperationalFactListResponse:
+    facts, total = await repository.list_operational_facts(
+        session,
+        user=user,
+        page=page,
+        page_size=page_size,
+        uploaded_file_id=uploaded_file_id,
+        buyer=buyer,
+        unit=unit,
+        metric_key=metric,
+        report_date=report_date,
+    )
+    return OperationalFactListResponse(
+        facts=[serialize_operational_fact(fact) for fact in facts],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/operations/by-buyer", response_model=OperationalFactListResponse)
+async def list_operational_facts_by_buyer(
+    session: SessionDep,
+    user: ReportReaderDep,
+    buyer: Annotated[str, Query(min_length=1)],
+    report_date: date | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=500)] = 50,
+) -> OperationalFactListResponse:
+    facts, total = await repository.list_operational_facts(
+        session,
+        user=user,
+        page=page,
+        page_size=page_size,
+        buyer=buyer,
+        report_date=report_date,
+    )
+    return OperationalFactListResponse(
+        facts=[serialize_operational_fact(fact) for fact in facts],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/operations/by-unit", response_model=OperationalFactListResponse)
+async def list_operational_facts_by_unit(
+    session: SessionDep,
+    user: ReportReaderDep,
+    unit: Annotated[str, Query(min_length=1)],
+    report_date: date | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=500)] = 50,
+) -> OperationalFactListResponse:
+    facts, total = await repository.list_operational_facts(
+        session,
+        user=user,
+        page=page,
+        page_size=page_size,
+        unit=unit,
+        report_date=report_date,
+    )
+    return OperationalFactListResponse(
+        facts=[serialize_operational_fact(fact) for fact in facts],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/operations/by-metric", response_model=OperationalFactListResponse)
+async def list_operational_facts_by_metric(
+    session: SessionDep,
+    user: ReportReaderDep,
+    metric: Annotated[str, Query(min_length=1)],
+    report_date: date | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=500)] = 50,
+) -> OperationalFactListResponse:
+    facts, total = await repository.list_operational_facts(
+        session,
+        user=user,
+        page=page,
+        page_size=page_size,
+        metric_key=metric,
+        report_date=report_date,
+    )
+    return OperationalFactListResponse(
+        facts=[serialize_operational_fact(fact) for fact in facts],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/operations/summary", response_model=OperationalSummaryResponse)
+async def get_operational_summary(
+    session: SessionDep,
+    user: ReportReaderDep,
+    uploaded_file_id: UUID | None = None,
+    buyer: str | None = None,
+    unit: str | None = None,
+    metric: str | None = None,
+    report_date: date | None = None,
+) -> OperationalSummaryResponse:
+    rows = await repository.summarize_operational_facts(
+        session,
+        user=user,
+        uploaded_file_id=uploaded_file_id,
+        buyer=buyer,
+        unit=unit,
+        metric_key=metric,
+        report_date=report_date,
+    )
+    return OperationalSummaryResponse(
+        rows=[serialize_operational_summary_row(row) for row in rows],
+        total=len(rows),
+    )
+
+
+@router.get(
+    "/workbooks/{uploaded_file_id}/semantics",
+    response_model=WorkbookSemanticBreakdownResponse,
+)
+async def get_workbook_semantics(
+    uploaded_file_id: UUID,
+    session: SessionDep,
+    user: ReportReaderDep,
+) -> WorkbookSemanticBreakdownResponse:
+    uploaded_file = await repository.get_accessible_uploaded_file(
+        session,
+        uploaded_file_id=uploaded_file_id,
+        user=user,
+    )
+    if uploaded_file is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workbook not found.")
+
+    facts, _total = await repository.list_operational_facts(
+        session,
+        user=user,
+        uploaded_file_id=uploaded_file_id,
+        page=1,
+        page_size=500,
+    )
+    summary_rows = await repository.summarize_operational_facts(
+        session,
+        user=user,
+        uploaded_file_id=uploaded_file_id,
+    )
+    semantic_mapping = uploaded_file.metadata_.get("semantic_mapping", {})
+    raw_regions = semantic_mapping.get("regions", []) if isinstance(semantic_mapping, dict) else []
+    regions = [
+        WorkbookSemanticRegionResponse.model_validate(region)
+        for region in raw_regions
+        if isinstance(region, dict)
+    ]
+    return WorkbookSemanticBreakdownResponse(
+        uploaded_file_id=uploaded_file_id,
+        semantic_mapping=semantic_mapping if isinstance(semantic_mapping, dict) else {},
+        regions=regions,
+        facts=[serialize_operational_fact(fact) for fact in facts],
+        summary=OperationalSummaryResponse(
+            rows=[serialize_operational_summary_row(row) for row in summary_rows],
+            total=len(summary_rows),
+        ),
     )
 
 

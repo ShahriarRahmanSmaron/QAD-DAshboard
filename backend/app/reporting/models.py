@@ -49,6 +49,14 @@ class ReportValueType(StrEnum):
     BOOLEAN = "boolean"
 
 
+class OperationalValueType(StrEnum):
+    TEXT = "text"
+    NUMBER = "number"
+    DATE = "date"
+    BOOLEAN = "boolean"
+    BLANK = "blank"
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -246,6 +254,10 @@ class UploadedFile(TimestampMixin, SoftDeleteMixin, Base):
     )
 
     reports: Mapped[list[Report]] = relationship(back_populates="source_file")
+    operational_facts: Mapped[list[OperationalFact]] = relationship(
+        back_populates="uploaded_file",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -521,6 +533,123 @@ class ReportMetric(TimestampMixin, SoftDeleteMixin, AuditFieldsMixin, Base):
         Index("report_metrics_metric_key_idx", "metric_key"),
         Index("report_metrics_value_numeric_idx", "metric_key", "value_numeric"),
         Index("report_metrics_deleted_at_idx", "deleted_at"),
+    )
+
+
+class OperationalFact(TimestampMixin, SoftDeleteMixin, AuditFieldsMixin, Base):
+    __tablename__ = "operational_facts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    uploaded_file_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("uploaded_files.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    report_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("reports.id", ondelete="SET NULL"),
+    )
+    buyer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("buyers.id", ondelete="SET NULL"),
+    )
+    unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("units.id", ondelete="SET NULL"),
+    )
+    buyer: Mapped[str | None] = mapped_column(String(255))
+    unit: Mapped[str | None] = mapped_column(String(255))
+    report_date: Mapped[date | None] = mapped_column(Date)
+    metric_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    metric_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    operational_section: Mapped[str] = mapped_column(String(128), nullable=False)
+    operational_section_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    operational_row_key: Mapped[str | None] = mapped_column(String(255))
+    operational_row_label: Mapped[str | None] = mapped_column(String(512))
+    column_label: Mapped[str | None] = mapped_column(String(512))
+    value_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    value_numeric: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    value_text: Mapped[str | None] = mapped_column(Text)
+    value_date: Mapped[date | None] = mapped_column(Date)
+    value_boolean: Mapped[bool | None] = mapped_column(Boolean)
+    unit_of_measure: Mapped[str | None] = mapped_column(String(64))
+    is_formula: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    formula: Mapped[str | None] = mapped_column(Text)
+    calculated_state: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default=text("'static'"),
+    )
+    source_sheet_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_sheet_index: Mapped[int | None] = mapped_column(Integer)
+    source_cell_address: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_column_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_region_id: Mapped[str | None] = mapped_column(String(255))
+    source_region_kind: Mapped[str | None] = mapped_column(String(128))
+    source_region_range: Mapped[str | None] = mapped_column(String(64))
+    workbook_sheet_identity: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+    workbook_source: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+
+    uploaded_file: Mapped[UploadedFile] = relationship(back_populates="operational_facts")
+    report: Mapped[Report | None] = relationship()
+    buyer_ref: Mapped[Buyer | None] = relationship(foreign_keys=[buyer_id])
+    unit_ref: Mapped[Unit | None] = relationship(foreign_keys=[unit_id])
+
+    __table_args__ = (
+        CheckConstraint("length(trim(metric_key)) > 0", name="operational_facts_metric_not_blank"),
+        CheckConstraint(
+            "length(trim(operational_section)) > 0",
+            name="operational_facts_section_not_blank",
+        ),
+        CheckConstraint(
+            "value_type in ('text', 'number', 'date', 'boolean', 'blank')",
+            name="operational_facts_value_type_check",
+        ),
+        CheckConstraint(
+            "calculated_state in ('static', 'formula', 'calculated', 'blank')",
+            name="operational_facts_calculated_state_check",
+        ),
+        CheckConstraint(
+            "source_row_number > 0 and source_column_number > 0",
+            name="operational_facts_source_position_positive",
+        ),
+        Index("operational_facts_uploaded_file_idx", "uploaded_file_id"),
+        Index("operational_facts_report_date_idx", "report_date"),
+        Index("operational_facts_buyer_date_idx", "buyer", "report_date"),
+        Index("operational_facts_unit_date_idx", "unit", "report_date"),
+        Index("operational_facts_metric_date_idx", "metric_key", "report_date"),
+        Index("operational_facts_section_idx", "operational_section"),
+        Index("operational_facts_source_cell_idx", "source_sheet_name", "source_cell_address"),
+        Index("operational_facts_deleted_at_idx", "deleted_at"),
+        Index(
+            "operational_facts_upload_source_active_key",
+            "uploaded_file_id",
+            "source_sheet_name",
+            "source_cell_address",
+            "metric_key",
+            "operational_section",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
     )
 
 

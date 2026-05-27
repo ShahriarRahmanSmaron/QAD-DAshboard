@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.reporting.models import ReportStatus, ReportValueType
+from app.reporting.models import OperationalValueType, ReportStatus, ReportValueType
 
 JsonObject = dict[str, Any]
 
@@ -257,6 +257,96 @@ class WorkbookUploadResponse(BaseModel):
     original_filename: str
     file_size_bytes: int
     metadata: WorkbookParsePreview
+
+
+class OperationalFactResponse(BaseModel):
+    id: UUID
+    uploaded_file_id: UUID
+    report_id: UUID | None
+    buyer_id: UUID | None
+    unit_id: UUID | None
+    buyer: str | None
+    unit: str | None
+    report_date: date | None
+    metric_key: str
+    metric_label: str
+    operational_section: str
+    operational_section_label: str
+    operational_row_key: str | None
+    operational_row_label: str | None
+    column_label: str | None
+    value_type: OperationalValueType
+    value_numeric: Decimal | None
+    value_text: str | None
+    value_date: date | None
+    value_boolean: bool | None
+    unit_of_measure: str | None
+    is_formula: bool
+    formula: str | None
+    calculated_state: str
+    source_sheet_name: str
+    source_sheet_index: int | None
+    source_cell_address: str
+    source_row_number: int
+    source_column_number: int
+    source_region_id: str | None
+    source_region_kind: str | None
+    source_region_range: str | None
+    workbook_sheet_identity: JsonObject
+    workbook_source: JsonObject
+    metadata: JsonObject
+    created_at: datetime
+    updated_at: datetime
+
+
+class OperationalFactListResponse(BaseModel):
+    facts: list[OperationalFactResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class OperationalSummaryRow(BaseModel):
+    metric_key: str
+    metric_label: str
+    operational_section: str
+    buyer: str | None
+    unit: str | None
+    report_date: date | None
+    fact_count: int
+    numeric_total: Decimal | None
+    formula_count: int
+
+
+class OperationalSummaryResponse(BaseModel):
+    rows: list[OperationalSummaryRow]
+    total: int
+
+
+class WorkbookSemanticRegionResponse(BaseModel):
+    id: str
+    sheet_name: str
+    section: str
+    section_label: str
+    metric_key: str
+    metric_label: str
+    source_region_id: str | None = None
+    source_region_kind: str | None = None
+    range: str
+    start_row: int
+    end_row: int
+    start_column: int
+    end_column: int
+    fact_count: int
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class WorkbookSemanticBreakdownResponse(BaseModel):
+    uploaded_file_id: UUID
+    semantic_mapping: JsonObject
+    regions: list[WorkbookSemanticRegionResponse]
+    facts: list[OperationalFactResponse]
+    summary: OperationalSummaryResponse
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Any
 
-from openpyxl.utils.cell import get_column_letter
+from openpyxl.utils.cell import get_column_letter  # type: ignore[import-untyped]
 
 EDITABLE_REGION_KINDS = {"operational_block", "metric_zone"}
 READONLY_REGION_KINDS = {

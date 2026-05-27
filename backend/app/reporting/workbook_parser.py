@@ -17,7 +17,7 @@ from app.reporting.workbook_sync import (
 # diagnostics. Imported lazily-friendly at module top because openpyxl is a
 # runtime dependency of the parser anyway.
 try:  # pragma: no cover - import guard exercised only when openpyxl is missing
-    from openpyxl.utils.cell import get_column_letter
+    from openpyxl.utils.cell import get_column_letter  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover - resolved at parse time
     def get_column_letter(index: int) -> str:
         # Minimal fallback that mirrors openpyxl's algorithm so diagnostics
@@ -912,14 +912,14 @@ def _parse_single_sheet(
 
 def parse_xlsx_workbook(path: Path, *, filename: str) -> dict[str, Any]:
     try:
-        from openpyxl import load_workbook
+        from openpyxl import load_workbook  # type: ignore[import-untyped]
     except ImportError as exc:
         raise RuntimeError(
             "openpyxl is required for workbook ingestion. Install backend dependencies first."
         ) from exc
 
     try:
-        import pandas as pd
+        import pandas as pd  # type: ignore[import-untyped]
 
         pandas_sheet_names = list(pd.ExcelFile(path).sheet_names)
     except Exception:

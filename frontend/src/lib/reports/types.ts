@@ -1,6 +1,7 @@
 export type ReportStatus = "draft" | "in_review" | "approved" | "rejected" | "locked" | "archived";
 export type ReportWorkflowAction = "submit_for_review" | "approve" | "reject" | "lock" | "archive";
 export type ReportValueType = "text" | "number" | "date" | "boolean";
+export type OperationalValueType = ReportValueType | "blank";
 
 export type ReportMetric = {
   id: string;
@@ -227,6 +228,150 @@ export type ReportTypeListResponse = {
   report_types: ReportTypeOption[];
 };
 
+export type OperationalFact = {
+  id: string;
+  uploaded_file_id: string;
+  report_id: string | null;
+  buyer_id: string | null;
+  unit_id: string | null;
+  buyer: string | null;
+  unit: string | null;
+  report_date: string | null;
+  metric_key: string;
+  metric_label: string;
+  operational_section: string;
+  operational_section_label: string;
+  operational_row_key: string | null;
+  operational_row_label: string | null;
+  column_label: string | null;
+  value_type: OperationalValueType;
+  value_numeric: string | number | null;
+  value_text: string | null;
+  value_date: string | null;
+  value_boolean: boolean | null;
+  unit_of_measure: string | null;
+  is_formula: boolean;
+  formula: string | null;
+  calculated_state: string;
+  source_sheet_name: string;
+  source_sheet_index: number | null;
+  source_cell_address: string;
+  source_row_number: number;
+  source_column_number: number;
+  source_region_id: string | null;
+  source_region_kind: string | null;
+  source_region_range: string | null;
+  workbook_sheet_identity: Record<string, unknown>;
+  workbook_source: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OperationalFactListResponse = {
+  facts: OperationalFact[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type OperationalSummaryRow = {
+  metric_key: string;
+  metric_label: string;
+  operational_section: string;
+  buyer: string | null;
+  unit: string | null;
+  report_date: string | null;
+  fact_count: number;
+  numeric_total: string | number | null;
+  formula_count: number;
+};
+
+export type OperationalSummaryResponse = {
+  rows: OperationalSummaryRow[];
+  total: number;
+};
+
+export type WorkbookSemanticRegion = {
+  id: string;
+  sheet_name: string;
+  section: string;
+  section_label: string;
+  metric_key: string;
+  metric_label: string;
+  source_region_id?: string | null;
+  source_region_kind?: string | null;
+  range: string;
+  start_row: number;
+  end_row: number;
+  start_column: number;
+  end_column: number;
+  fact_count: number;
+  metadata: Record<string, unknown>;
+};
+
+export type WorkbookSemanticFact = Partial<OperationalFact> & {
+  source_key: string;
+  buyer: string | null;
+  unit: string | null;
+  report_date: string | null;
+  metric_key: string;
+  metric_label: string;
+  operational_section: string;
+  operational_section_label: string;
+  operational_row_label: string | null;
+  column_label: string | null;
+  value_type: OperationalValueType;
+  value_numeric: string | number | null;
+  value_text: string | null;
+  value_date: string | null;
+  value_boolean: boolean | null;
+  is_formula: boolean;
+  formula: string | null;
+  calculated_state: string;
+  source_sheet_name: string;
+  source_cell_address: string;
+  source_row_number: number;
+  source_column_number: number;
+};
+
+export type WorkbookSemanticMapping = {
+  version: number;
+  engine: string;
+  uploaded_file_id: string | null;
+  status: "mapped" | "empty" | string;
+  report_date: string | null;
+  fact_count: number;
+  semantic_region_count: number;
+  sheets: {
+    name: string;
+    index: number;
+    fact_count: number;
+    semantic_region_count: number;
+    sections: {
+      section: string;
+      section_label: string;
+      fact_count: number;
+      range: string;
+    }[];
+  }[];
+  regions: WorkbookSemanticRegion[];
+  facts: WorkbookSemanticFact[];
+  summary: {
+    rows: OperationalSummaryRow[];
+    by_metric?: OperationalSummaryRow[];
+  };
+  prepared_for?: Record<string, boolean>;
+};
+
+export type WorkbookSemanticBreakdownResponse = {
+  uploaded_file_id: string;
+  semantic_mapping: WorkbookSemanticMapping | Record<string, unknown>;
+  regions: WorkbookSemanticRegion[];
+  facts: OperationalFact[];
+  summary: OperationalSummaryResponse;
+};
+
 export type WorkbookCellPreview = {
   address: string;
   row: number;
@@ -428,6 +573,7 @@ export type WorkbookParsePreview = {
   parser: string;
   preview_limits: Record<string, unknown>;
   workbook_sync: Record<string, unknown>;
+  semantic_mapping?: WorkbookSemanticMapping;
   sheets: WorkbookSheetPreview[];
   degraded_sheets?: string[];
   reconstruction_diagnostics?: WorkbookReconstructionDiagnostics;
