@@ -12,6 +12,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.schemas import AuthUser
 from app.reporting import repository
 from app.reporting.models import OperationalFact, UploadedFile
+from app.reporting.workbook_diagnostics import build_semantic_diagnostics
+from app.reporting.workbook_normalization import (
+    CONFIDENCE_EXPLICIT,
+    CONFIDENCE_INFERRED,
+    CONFIDENCE_UNMAPPED,
+    MappingConfidence,
+    aggregate_confidence,
+    canonical_metric_label,
+    canonical_section_label,
+    normalize_buyer,
+    normalize_report_date,
+    normalize_unit,
+    slugify,
+)
 
 JsonObject = dict[str, Any]
 CellKey = tuple[int, int]
@@ -538,14 +552,15 @@ def _metric_for_cell(
     *,
     column_label: str | None,
     row_label: str | None,
-) -> SectionDefinition:
+) -> tuple[SectionDefinition, str]:
+    """Return the metric definition for a cell and its confidence band."""
     for text in (column_label, row_label):
         if not text:
             continue
         matched = _match_section(text)
         if matched is not None:
-            return matched
-    return SECTION_BY_KEY[section.key]
+            return matched, CONFIDENCE_EXPLICIT
+    return SECTION_BY_KEY[section.key], CONFIDENCE_INFERRED
 
 
 def _infer_buyer(
@@ -554,16 +569,26 @@ def _infer_buyer(
     row_label: str | None,
     row_texts: list[str],
     global_buyer: str | None,
-) -> str | None:
+) -> tuple[str | None, str]:
+    """Return ``(buyer, confidence)`` for a fact.
+
+    ``CONFIDENCE_EXPLICIT`` means the buyer was matched from a row label in a
+    buyer-wise section. ``CONFIDENCE_INFERRED`` means we used a workbook-level
+    or row-text fallback. ``CONFIDENCE_UNMAPPED`` means we could not produce a
+    buyer at all.
+    """
     if section.key == "buyer_wise_breakdown":
         buyer = _probable_buyer_from_text(row_label)
         if buyer:
-            return buyer
+            return normalize_buyer(buyer), CONFIDENCE_EXPLICIT
     for text in row_texts:
         buyer = _probable_buyer_from_text(text)
         if buyer:
-            return buyer
-    return _clean_dimension(global_buyer)
+            return normalize_buyer(buyer), CONFIDENCE_INFERRED
+    fallback = normalize_buyer(global_buyer)
+    if fallback is not None:
+        return fallback, CONFIDENCE_INFERRED
+    return None, CONFIDENCE_UNMAPPED
 
 
 def _infer_unit(
@@ -573,14 +598,27 @@ def _infer_unit(
     column_label: str | None,
     row_texts: list[str],
     global_unit: str | None,
-) -> str | None:
+) -> tuple[str | None, str]:
+    """Return ``(unit, confidence)`` for a fact."""
     for text in (column_label, row_label, *row_texts):
-        unit = _unit_from_text(text)
-        if unit:
-            return unit
+        normalized = normalize_unit(text)
+        if normalized:
+            return normalized, CONFIDENCE_EXPLICIT
     if section.key in {"unit_wise_totals", "unit"}:
-        return _clean_dimension(row_label) or _clean_dimension(global_unit)
-    return _clean_dimension(global_unit)
+        unit_text = _clean_dimension(row_label)
+        if unit_text:
+            normalized = normalize_unit(unit_text) or unit_text.upper()
+            return normalized, CONFIDENCE_INFERRED
+        global_text = _clean_dimension(global_unit)
+        if global_text:
+            normalized_global = normalize_unit(global_text) or global_text.upper()
+            return normalized_global, CONFIDENCE_INFERRED
+        return None, CONFIDENCE_UNMAPPED
+    fallback = _clean_dimension(global_unit)
+    if fallback:
+        normalized = normalize_unit(fallback) or fallback.upper()
+        return normalized, CONFIDENCE_INFERRED
+    return None, CONFIDENCE_UNMAPPED
 
 
 def _report_date_for_cell(
@@ -589,14 +627,17 @@ def _report_date_for_cell(
     column_label: str | None,
     row_label: str | None,
     value: Any,
-) -> date | None:
+) -> tuple[date | None, str]:
+    """Return ``(date, confidence)`` for a fact's report date."""
     for candidate in (column_label, row_label, _cell_text(value)):
         if not candidate:
             continue
         parsed = _parse_date_text(candidate)
         if parsed is not None:
-            return parsed
-    return workbook_report_date
+            return parsed, CONFIDENCE_EXPLICIT
+    if workbook_report_date is not None:
+        return workbook_report_date, CONFIDENCE_INFERRED
+    return None, CONFIDENCE_UNMAPPED
 
 
 def _build_sections(sheet: JsonObject, cells: dict[CellKey, JsonObject]) -> list[SemanticSection]:
@@ -743,7 +784,11 @@ def _extract_sheet_semantics(
                     column_number=column_number,
                     section_start_row=section.start_row,
                 )
-                metric = _metric_for_cell(section, column_label=col_label, row_label=row_label)
+                metric, metric_confidence = _metric_for_cell(
+                    section,
+                    column_label=col_label,
+                    row_label=row_label,
+                )
                 source_region = _region_for_point(
                     regions,
                     row=row_number,
@@ -756,12 +801,13 @@ def _extract_sheet_semantics(
                 source_region_range = (
                     _region_text(source_region, "range") or section.source_region_range
                 )
-                report_date = _report_date_for_cell(
+                report_date, date_confidence = _report_date_for_cell(
                     workbook_report_date=sheet_date,
                     column_label=col_label,
                     row_label=row_label,
                     value=value,
                 )
+                report_date = normalize_report_date(report_date)
                 calculated_state = _calculated_state(
                     formula=formula,
                     value_type=value_type,
@@ -769,28 +815,73 @@ def _extract_sheet_semantics(
                     section_key=section.key,
                 )
                 address = str(cell.get("address") or "")
+                buyer_value, buyer_confidence = _infer_buyer(
+                    section=section,
+                    row_label=row_label,
+                    row_texts=row_text_values,
+                    global_buyer=global_buyer,
+                )
+                unit_value, unit_confidence = _infer_unit(
+                    section=section,
+                    row_label=row_label,
+                    column_label=col_label,
+                    row_texts=row_text_values,
+                    global_unit=global_unit,
+                )
+                # Section confidence is explicit when the cell sits inside a
+                # named operational block (anything other than the catch-all
+                # ``operational_block`` definition).
+                section_confidence = (
+                    CONFIDENCE_EXPLICIT
+                    if section.key != "operational_block"
+                    else CONFIDENCE_INFERRED
+                )
+                # Reasons help the UI explain why a fact landed in a given
+                # confidence bucket without inspecting the raw workbook.
+                reasons: list[str] = []
+                if buyer_confidence == CONFIDENCE_UNMAPPED:
+                    reasons.append("buyer_unmapped")
+                if unit_confidence == CONFIDENCE_UNMAPPED:
+                    reasons.append("unit_unmapped")
+                if metric_confidence == CONFIDENCE_INFERRED:
+                    reasons.append("metric_from_section")
+                if date_confidence == CONFIDENCE_UNMAPPED:
+                    reasons.append("report_date_missing")
+                if section.key == "operational_block":
+                    reasons.append("section_unnamed")
+
+                overall_confidence = aggregate_confidence(
+                    [
+                        buyer_confidence,
+                        unit_confidence,
+                        metric_confidence,
+                        section_confidence,
+                        date_confidence,
+                    ]
+                )
+                mapping_confidence = MappingConfidence(
+                    overall=overall_confidence,
+                    buyer=buyer_confidence,
+                    unit=unit_confidence,
+                    metric=metric_confidence,
+                    section=section_confidence,
+                    report_date=date_confidence,
+                    reasons=tuple(reasons),
+                )
+
+                metric_label = canonical_metric_label(metric.key)
+                section_label = canonical_section_label(section.key)
                 facts.append(
                     SemanticFact(
                         source_key=f"{sheet_name}!{address}:{metric.key}:{section.key}",
-                        buyer=_infer_buyer(
-                            section=section,
-                            row_label=row_label,
-                            row_texts=row_text_values,
-                            global_buyer=global_buyer,
-                        ),
-                        unit=_infer_unit(
-                            section=section,
-                            row_label=row_label,
-                            column_label=col_label,
-                            row_texts=row_text_values,
-                            global_unit=global_unit,
-                        ),
+                        buyer=buyer_value,
+                        unit=unit_value,
                         report_date=report_date,
                         metric_key=metric.key,
-                        metric_label=metric.label,
+                        metric_label=metric_label,
                         operational_section=section.key,
-                        operational_section_label=section.label,
-                        operational_row_key=_slug(row_label),
+                        operational_section_label=section_label,
+                        operational_row_key=slugify(row_label),
                         operational_row_label=row_label,
                         column_label=col_label,
                         value_type=value_type,
@@ -818,8 +909,27 @@ def _extract_sheet_semantics(
                         workbook_source=workbook_source,
                         metadata={
                             "engine": "operational_semantic_mapper",
+                            "engine_version": 2,
                             "source_region_label": _region_text(source_region, "label"),
                             "sheet_dimension": dimension,
+                            "mapping_confidence": mapping_confidence.to_json(),
+                            "traceability": {
+                                "sheet_name": sheet_name,
+                                "sheet_index": sheet_index,
+                                "cell_address": address,
+                                "row_number": row_number,
+                                "column_number": column_number,
+                                "region_id": source_region_id
+                                or section.source_region_id,
+                                "region_range": source_region_range,
+                            },
+                            "normalization": {
+                                "buyer_source": buyer_confidence,
+                                "unit_source": unit_confidence,
+                                "metric_source": metric_confidence,
+                                "report_date_source": date_confidence,
+                                "section_source": section_confidence,
+                            },
                         },
                     )
                 )
@@ -939,8 +1049,9 @@ def extract_workbook_semantics(
         )
 
     semantic_mapping: JsonObject = {
-        "version": 1,
+        "version": 2,
         "engine": "operational_semantic_mapper",
+        "engine_version": 2,
         "uploaded_file_id": str(uploaded_file_id) if uploaded_file_id else None,
         "status": "mapped" if facts else "empty",
         "report_date": workbook_report_date.isoformat() if workbook_report_date else None,
@@ -959,7 +1070,15 @@ def extract_workbook_semantics(
             "historical_aggregation": True,
         },
     }
-    return SemanticExtraction(facts=facts, regions=regions, semantic_mapping=semantic_mapping)
+    extraction = SemanticExtraction(facts=facts, regions=regions, semantic_mapping=semantic_mapping)
+    diagnostics = build_semantic_diagnostics(
+        workbook_metadata=workbook_metadata,
+        extraction=extraction,
+    )
+    semantic_mapping["diagnostics"] = diagnostics.to_json()
+    semantic_mapping["confidence_counts"] = dict(diagnostics.confidence_counts)
+    semantic_mapping["health"] = diagnostics.health
+    return extraction
 
 
 def build_operational_fact_models(

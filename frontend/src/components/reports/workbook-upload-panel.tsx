@@ -9,9 +9,10 @@ import {
   type RowStyle,
 } from "ag-grid-community";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bug, Database, Download, FileSpreadsheet, Layers3, Loader2, Upload, X } from "lucide-react";
+import { Bug, Database, Download, FileSpreadsheet, Layers3, Loader2, ShieldCheck, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { SemanticDiagnosticsPanel } from "@/components/reports/semantic-diagnostics-panel";
 import {
   exportWorkbook,
   triggerWorkbookDownload,
@@ -19,6 +20,7 @@ import {
   type WorkbookExportPayload,
 } from "@/lib/reports/api";
 import type {
+  SemanticDiagnostics,
   WorkbookCellPreview,
   WorkbookSemanticFact,
   WorkbookSemanticMapping,
@@ -60,6 +62,7 @@ type WorkbookGridRow = {
   __mergeSpans: Record<string, WorkbookMergeSpan>;
   __semanticFields: Record<string, boolean>;
   __semanticLabels: Record<string, string>;
+  __semanticConfidence: Record<string, string>;
   [field: string]: unknown;
 };
 
@@ -558,6 +561,7 @@ function buildSheetGridRows(
       __mergeSpans: {},
       __semanticFields: {},
       __semanticLabels: {},
+      __semanticConfidence: {},
     };
 
     for (const syncColumn of visibleColumns) {
@@ -601,6 +605,11 @@ function buildSheetGridRows(
       if (semanticFact) {
         row.__semanticFields[field] = true;
         row.__semanticLabels[field] = semanticFactTitle(semanticFact);
+        const confidence =
+          semanticFact.metadata?.mapping_confidence?.overall ?? null;
+        if (confidence) {
+          row.__semanticConfidence[field] = confidence;
+        }
       }
       if (readonlyReason) {
         row.__readonlyReasons[field] = readonlyReason;
@@ -1003,24 +1012,50 @@ function SemanticBreakdownPanel({
           </div>
           <div className="mt-2 grid gap-1.5">
             {selectedFacts.length > 0 ? (
-              selectedFacts.slice(0, 12).map((fact) => (
-                <div
-                  className="grid grid-cols-[4.75rem_minmax(0,1fr)_auto] items-center gap-2 rounded-sm border bg-card/50 px-2 py-1.5"
-                  key={fact.source_key}
-                >
-                  <span className="font-mono text-[11px] text-muted-foreground">
-                    {fact.source_cell_address}
-                  </span>
-                  <span className="min-w-0 truncate text-foreground">
-                    {fact.metric_label}
-                    {fact.buyer ? ` / ${fact.buyer}` : ""}
-                    {fact.unit ? ` / ${fact.unit}` : ""}
-                  </span>
-                  <span className="text-right font-semibold tabular-nums">
-                    {formatSemanticFactValue(fact)}
-                  </span>
-                </div>
-              ))
+              selectedFacts.slice(0, 12).map((fact) => {
+                const confidence = fact.metadata?.mapping_confidence?.overall ?? null;
+                const confidenceTone =
+                  confidence === "explicit"
+                    ? "border-emerald-300/40 bg-emerald-100/40 text-emerald-900 dark:border-emerald-400/30 dark:bg-emerald-900/30 dark:text-emerald-200"
+                    : confidence === "inferred"
+                      ? "border-sky-300/40 bg-sky-100/40 text-sky-900 dark:border-sky-400/30 dark:bg-sky-900/30 dark:text-sky-200"
+                      : confidence === "ambiguous"
+                        ? "border-amber-300/40 bg-amber-100/40 text-amber-900 dark:border-amber-400/30 dark:bg-amber-900/30 dark:text-amber-200"
+                        : "border-zinc-300/40 bg-zinc-100/40 text-zinc-700 dark:border-zinc-400/30 dark:bg-zinc-900/30 dark:text-zinc-300";
+                return (
+                  <div
+                    className="grid grid-cols-[4.75rem_minmax(0,1fr)_auto_auto] items-center gap-2 rounded-sm border bg-card/50 px-2 py-1.5"
+                    key={fact.source_key}
+                  >
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {fact.source_cell_address}
+                    </span>
+                    <span className="min-w-0 truncate text-foreground">
+                      {fact.metric_label}
+                      {fact.buyer ? ` / ${fact.buyer}` : ""}
+                      {fact.unit ? ` / ${fact.unit}` : ""}
+                    </span>
+                    {confidence ? (
+                      <span
+                        className={cn(
+                          "rounded-sm border px-1 py-[1px] text-[10px] font-medium uppercase tracking-wide",
+                          confidenceTone,
+                        )}
+                        title={
+                          fact.metadata?.mapping_confidence?.reasons?.join(", ") ?? confidence
+                        }
+                      >
+                        {confidence}
+                      </span>
+                    ) : (
+                      <span />
+                    )}
+                    <span className="text-right font-semibold tabular-nums">
+                      {formatSemanticFactValue(fact)}
+                    </span>
+                  </div>
+                );
+              })
             ) : (
               <div className="rounded-sm border border-dashed px-2 py-2 text-muted-foreground">
                 No operational values mapped for this sheet.
@@ -1068,6 +1103,7 @@ export function WorkbookUploadPanel() {
   const [showRegionOverlay, setShowRegionOverlay] = useState(false);
   const [showSemanticPanel, setShowSemanticPanel] = useState(false);
   const [showSemanticOverlay, setShowSemanticOverlay] = useState(false);
+  const [showVerification, setShowVerification] = useState(false);
 
   const selectedSheet = useMemo(
     () =>
@@ -1120,6 +1156,11 @@ export function WorkbookUploadPanel() {
         : [],
     [selectedSheet, semanticMapping],
   );
+
+  const semanticDiagnostics: SemanticDiagnostics | null = useMemo(() => {
+    const diagnostics = semanticMapping?.diagnostics;
+    return diagnostics ?? null;
+  }, [semanticMapping]);
 
   const previewRows = useMemo(
     () => result?.metadata.sheets.map(sheetToPreviewRow) ?? [],
@@ -1256,10 +1297,21 @@ export function WorkbookUploadPanel() {
           }
           if (params.data?.__semanticFields?.[field]) {
             classes.push("workbook-cell-semantic");
+            const confidence = params.data?.__semanticConfidence?.[field];
+            if (confidence) {
+              classes.push(`workbook-cell-semantic-${confidence}`);
+            }
           }
           return classes;
         },
-        tooltipValueGetter: (params) => params.data?.__semanticLabels?.[field] ?? undefined,
+        tooltipValueGetter: (params) => {
+          const label = params.data?.__semanticLabels?.[field];
+          const confidence = params.data?.__semanticConfidence?.[field];
+          if (!label) {
+            return undefined;
+          }
+          return confidence ? `${label} · ${confidence}` : label;
+        },
         cellStyle: (params) => {
           const style = params.data?.__styles?.[field] ?? {};
           if (params.data?.__editableFields?.[field]) {
@@ -1289,6 +1341,7 @@ export function WorkbookUploadPanel() {
     setWorkbookEdits({});
     setShowSemanticPanel(false);
     setShowSemanticOverlay(false);
+    setShowVerification(false);
     setProgress(4);
     setIsUploading(true);
     try {
@@ -1296,6 +1349,8 @@ export function WorkbookUploadPanel() {
       setResult(response);
       setSelectedSheetName(response.metadata.sheets[0]?.name ?? "");
       setShowSemanticPanel(Boolean(response.metadata.semantic_mapping?.fact_count));
+      const health = response.metadata.semantic_mapping?.diagnostics?.health;
+      setShowVerification(health === "warning" || health === "error");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Workbook upload failed.");
     } finally {
@@ -1412,6 +1467,35 @@ export function WorkbookUploadPanel() {
                   Semantic
                 </Button>
               )}
+              {semanticDiagnostics && (
+                <Button
+                  aria-label={
+                    showVerification
+                      ? "Hide semantic verification panel"
+                      : "Show semantic verification panel"
+                  }
+                  onClick={() => setShowVerification((prev) => !prev)}
+                  title={`Workbook semantic health: ${semanticDiagnostics.health}`}
+                  type="button"
+                  variant={showVerification ? "default" : "outline"}
+                  className={cn(
+                    semanticDiagnostics.health === "warning" &&
+                      !showVerification &&
+                      "border-amber-300/60 text-amber-700 hover:text-amber-800 dark:border-amber-400/40 dark:text-amber-300",
+                    semanticDiagnostics.health === "error" &&
+                      !showVerification &&
+                      "border-rose-300/60 text-rose-700 hover:text-rose-800 dark:border-rose-400/40 dark:text-rose-300",
+                  )}
+                >
+                  <ShieldCheck className="size-4" />
+                  Verify
+                  {semanticDiagnostics.health !== "ok" && (
+                    <span className="ml-1 rounded-sm bg-current px-1.5 py-0.5 text-[10px] font-semibold uppercase text-background">
+                      {semanticDiagnostics.health}
+                    </span>
+                  )}
+                </Button>
+              )}
               <Button
                 aria-label={
                   showDiagnostics
@@ -1457,6 +1541,7 @@ export function WorkbookUploadPanel() {
                   setShowRegionOverlay(false);
                   setShowSemanticPanel(false);
                   setShowSemanticOverlay(false);
+                  setShowVerification(false);
                 }}
                 type="button"
                 variant="outline"
@@ -1629,7 +1714,21 @@ export function WorkbookUploadPanel() {
                 </div>
                 <div className="rounded-md border bg-background/55 px-3 py-2">
                   <div className="text-xs text-muted-foreground">Semantic facts</div>
-                  <div className="mt-1 font-medium">{semanticMapping?.fact_count ?? 0}</div>
+                  <div className="mt-1 flex items-center gap-2 font-medium">
+                    <span>{semanticMapping?.fact_count ?? 0}</span>
+                    {semanticDiagnostics && semanticDiagnostics.health !== "ok" && (
+                      <span
+                        className={cn(
+                          "rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                          semanticDiagnostics.health === "warning"
+                            ? "border-amber-300/40 bg-amber-100/30 text-amber-900 dark:border-amber-400/30 dark:bg-amber-900/20 dark:text-amber-200"
+                            : "border-rose-300/40 bg-rose-100/30 text-rose-900 dark:border-rose-400/30 dark:bg-rose-900/20 dark:text-rose-200",
+                        )}
+                      >
+                        {semanticDiagnostics.health}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1773,6 +1872,14 @@ export function WorkbookUploadPanel() {
                   selectedSheet={selectedSheet}
                   showSemanticOverlay={showSemanticOverlay}
                   onToggleSemanticOverlay={() => setShowSemanticOverlay((prev) => !prev)}
+                />
+              )}
+
+              {showVerification && (
+                <SemanticDiagnosticsPanel
+                  diagnostics={semanticDiagnostics}
+                  mapping={semanticMapping ?? null}
+                  selectedSheetName={selectedSheet?.name ?? null}
                 />
               )}
 

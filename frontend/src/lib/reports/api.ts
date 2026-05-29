@@ -15,6 +15,7 @@ import type {
   ReportTypeListResponse,
   UnitListResponse,
   WorkbookSemanticBreakdownResponse,
+  WorkbookSemanticDiagnosticsResponse,
   WorkbookUploadResponse,
 } from "@/lib/reports/types";
 
@@ -178,6 +179,12 @@ export function getOperationalSummary(
 export function getWorkbookSemantics(uploadedFileId: string) {
   return request<WorkbookSemanticBreakdownResponse>(
     `/api/reports/workbooks/${uploadedFileId}/semantics`,
+  );
+}
+
+export function getWorkbookDiagnostics(uploadedFileId: string) {
+  return request<WorkbookSemanticDiagnosticsResponse>(
+    `/api/reports/workbooks/${uploadedFileId}/diagnostics`,
   );
 }
 

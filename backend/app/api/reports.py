@@ -23,8 +23,10 @@ from app.reporting.schemas import (
     ReportRowCreateRequest,
     ReportRowResponse,
     ReportSummaryListResponse,
+    SemanticDiagnosticsResponse,
     WorkbookExportRequest,
     WorkbookSemanticBreakdownResponse,
+    WorkbookSemanticDiagnosticsBundle,
     WorkbookSemanticRegionResponse,
     WorkbookUploadResponse,
 )
@@ -260,6 +262,19 @@ async def get_workbook_semantics(
         for region in raw_regions
         if isinstance(region, dict)
     ]
+    raw_diagnostics = (
+        semantic_mapping.get("diagnostics") if isinstance(semantic_mapping, dict) else None
+    )
+    diagnostics = (
+        SemanticDiagnosticsResponse.model_validate(raw_diagnostics)
+        if isinstance(raw_diagnostics, dict)
+        else None
+    )
+    confidence_counts = (
+        dict(semantic_mapping.get("confidence_counts", {}))
+        if isinstance(semantic_mapping, dict)
+        else {}
+    )
     return WorkbookSemanticBreakdownResponse(
         uploaded_file_id=uploaded_file_id,
         semantic_mapping=semantic_mapping if isinstance(semantic_mapping, dict) else {},
@@ -269,6 +284,67 @@ async def get_workbook_semantics(
             rows=[serialize_operational_summary_row(row) for row in summary_rows],
             total=len(summary_rows),
         ),
+        diagnostics=diagnostics,
+        confidence_counts=confidence_counts,
+    )
+
+
+@router.get(
+    "/workbooks/{uploaded_file_id}/diagnostics",
+    response_model=WorkbookSemanticDiagnosticsBundle,
+)
+async def get_workbook_diagnostics(
+    uploaded_file_id: UUID,
+    session: SessionDep,
+    user: ReportReaderDep,
+) -> WorkbookSemanticDiagnosticsBundle:
+    """Return only the semantic diagnostics block for a workbook.
+
+    Lighter than the full breakdown endpoint — useful for the diagnostics
+    panel in the upload UI which doesn't need the per-fact list every time.
+    """
+    uploaded_file = await repository.get_accessible_uploaded_file(
+        session,
+        uploaded_file_id=uploaded_file_id,
+        user=user,
+    )
+    if uploaded_file is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workbook not found.")
+
+    semantic_mapping = uploaded_file.metadata_.get("semantic_mapping", {}) or {}
+    raw_diagnostics = (
+        semantic_mapping.get("diagnostics") if isinstance(semantic_mapping, dict) else None
+    )
+    if not isinstance(raw_diagnostics, dict):
+        # No diagnostics persisted yet (older workbook upload). Return an
+        # empty-but-valid bundle so the UI can render the empty state without
+        # additional null-checking.
+        diagnostics = SemanticDiagnosticsResponse(
+            fact_count=0,
+            confidence_counts={},
+            sheets_with_facts=0,
+            sheets_without_facts=[],
+            unmapped_regions=[],
+            ambiguous_rows=[],
+            duplicate_facts=[],
+            orphan_cells=[],
+            missing_workbook_references=[],
+            issues=[],
+            health="ok",
+        )
+    else:
+        diagnostics = SemanticDiagnosticsResponse.model_validate(raw_diagnostics)
+
+    confidence_counts = (
+        dict(semantic_mapping.get("confidence_counts", {}))
+        if isinstance(semantic_mapping, dict)
+        else {}
+    )
+    return WorkbookSemanticDiagnosticsBundle(
+        uploaded_file_id=uploaded_file_id,
+        diagnostics=diagnostics,
+        confidence_counts=confidence_counts,
+        semantic_mapping=semantic_mapping if isinstance(semantic_mapping, dict) else {},
     )
 
 

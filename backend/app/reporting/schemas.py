@@ -341,12 +341,47 @@ class WorkbookSemanticRegionResponse(BaseModel):
     metadata: JsonObject = Field(default_factory=dict)
 
 
+class SemanticIssueResponse(BaseModel):
+    code: str
+    severity: str
+    message: str
+    sheet_name: str | None = None
+    cell_address: str | None = None
+    metric_key: str | None = None
+    operational_section: str | None = None
+    occurrences: int = 1
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class SemanticDiagnosticsResponse(BaseModel):
+    fact_count: int
+    confidence_counts: dict[str, int] = Field(default_factory=dict)
+    sheets_with_facts: int
+    sheets_without_facts: list[str] = Field(default_factory=list)
+    unmapped_regions: list[JsonObject] = Field(default_factory=list)
+    ambiguous_rows: list[JsonObject] = Field(default_factory=list)
+    duplicate_facts: list[JsonObject] = Field(default_factory=list)
+    orphan_cells: list[JsonObject] = Field(default_factory=list)
+    missing_workbook_references: list[JsonObject] = Field(default_factory=list)
+    issues: list[SemanticIssueResponse] = Field(default_factory=list)
+    health: str = "ok"
+
+
+class WorkbookSemanticDiagnosticsBundle(BaseModel):
+    uploaded_file_id: UUID
+    diagnostics: SemanticDiagnosticsResponse
+    confidence_counts: dict[str, int] = Field(default_factory=dict)
+    semantic_mapping: JsonObject = Field(default_factory=dict)
+
+
 class WorkbookSemanticBreakdownResponse(BaseModel):
     uploaded_file_id: UUID
     semantic_mapping: JsonObject
     regions: list[WorkbookSemanticRegionResponse]
     facts: list[OperationalFactResponse]
     summary: OperationalSummaryResponse
+    diagnostics: SemanticDiagnosticsResponse | None = None
+    confidence_counts: dict[str, int] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

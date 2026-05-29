@@ -310,6 +310,89 @@ export type WorkbookSemanticRegion = {
   metadata: Record<string, unknown>;
 };
 
+export type SemanticConfidenceBand =
+  | "explicit"
+  | "inferred"
+  | "ambiguous"
+  | "unmapped";
+
+export type SemanticMappingConfidence = {
+  overall: SemanticConfidenceBand;
+  buyer: SemanticConfidenceBand;
+  unit: SemanticConfidenceBand;
+  metric: SemanticConfidenceBand;
+  section: SemanticConfidenceBand;
+  report_date: SemanticConfidenceBand;
+  reasons: string[];
+};
+
+export type SemanticIssueSeverity = "info" | "warning" | "error";
+
+export type SemanticIssue = {
+  code: string;
+  severity: SemanticIssueSeverity;
+  message: string;
+  sheet_name?: string | null;
+  cell_address?: string | null;
+  metric_key?: string | null;
+  operational_section?: string | null;
+  occurrences: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type SemanticDiagnostics = {
+  fact_count: number;
+  confidence_counts: Partial<Record<SemanticConfidenceBand, number>>;
+  sheets_with_facts: number;
+  sheets_without_facts: string[];
+  unmapped_regions: Array<{
+    sheet_name?: string | null;
+    region_id?: string | null;
+    kind?: string | null;
+    label?: string | null;
+    range?: string | null;
+  }>;
+  ambiguous_rows: Array<{
+    sheet_name?: string | null;
+    row_number?: number | null;
+    operational_section?: string | null;
+    operational_section_label?: string | null;
+    fact_count?: number | null;
+    sample_cell_address?: string | null;
+    metric_key?: string | null;
+    metric_label?: string | null;
+    row_label?: string | null;
+  }>;
+  duplicate_facts: Array<{
+    buyer?: string | null;
+    unit?: string | null;
+    report_date?: string | null;
+    metric_key?: string | null;
+    metric_label?: string | null;
+    fact_count?: number | null;
+    sample_cells?: string[];
+  }>;
+  orphan_cells: Array<{
+    sheet_name?: string | null;
+    cell_address?: string | null;
+    value?: number | string | null;
+  }>;
+  missing_workbook_references: Array<{
+    source_key?: string | null;
+    missing_fields?: string[];
+    metric_key?: string | null;
+  }>;
+  issues: SemanticIssue[];
+  health: "ok" | "warning" | "error";
+};
+
+export type WorkbookSemanticDiagnosticsResponse = {
+  uploaded_file_id: string;
+  diagnostics: SemanticDiagnostics;
+  confidence_counts: Partial<Record<SemanticConfidenceBand, number>>;
+  semantic_mapping: WorkbookSemanticMapping | Record<string, unknown>;
+};
+
 export type WorkbookSemanticFact = Partial<OperationalFact> & {
   source_key: string;
   buyer: string | null;
@@ -333,11 +416,20 @@ export type WorkbookSemanticFact = Partial<OperationalFact> & {
   source_cell_address: string;
   source_row_number: number;
   source_column_number: number;
+  metadata?: {
+    mapping_confidence?: SemanticMappingConfidence;
+    traceability?: Record<string, unknown>;
+    normalization?: Record<string, string>;
+    engine?: string;
+    engine_version?: number;
+    [key: string]: unknown;
+  };
 };
 
 export type WorkbookSemanticMapping = {
   version: number;
   engine: string;
+  engine_version?: number;
   uploaded_file_id: string | null;
   status: "mapped" | "empty" | string;
   report_date: string | null;
@@ -362,6 +454,9 @@ export type WorkbookSemanticMapping = {
     by_metric?: OperationalSummaryRow[];
   };
   prepared_for?: Record<string, boolean>;
+  diagnostics?: SemanticDiagnostics;
+  confidence_counts?: Partial<Record<SemanticConfidenceBand, number>>;
+  health?: "ok" | "warning" | "error";
 };
 
 export type WorkbookSemanticBreakdownResponse = {
@@ -370,6 +465,8 @@ export type WorkbookSemanticBreakdownResponse = {
   regions: WorkbookSemanticRegion[];
   facts: OperationalFact[];
   summary: OperationalSummaryResponse;
+  diagnostics?: SemanticDiagnostics | null;
+  confidence_counts?: Partial<Record<SemanticConfidenceBand, number>>;
 };
 
 export type WorkbookCellPreview = {
