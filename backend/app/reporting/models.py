@@ -640,6 +640,12 @@ class OperationalFact(TimestampMixin, SoftDeleteMixin, AuditFieldsMixin, Base):
         Index("operational_facts_section_idx", "operational_section"),
         Index("operational_facts_source_cell_idx", "source_sheet_name", "source_cell_address"),
         Index("operational_facts_deleted_at_idx", "deleted_at"),
+        # MD07-2: query-engine indexes for the operational intelligence layer.
+        Index("operational_facts_buyer_id_idx", "buyer_id"),
+        Index("operational_facts_unit_id_idx", "unit_id"),
+        Index("operational_facts_metric_key_idx", "metric_key"),
+        Index("operational_facts_buyer_metric_date_idx", "buyer", "metric_key", "report_date"),
+        Index("operational_facts_unit_metric_date_idx", "unit", "metric_key", "report_date"),
         Index(
             "operational_facts_upload_source_active_key",
             "uploaded_file_id",

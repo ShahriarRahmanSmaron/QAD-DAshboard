@@ -54,6 +54,33 @@ type Props = {
   selectedSheetName?: string | null;
 };
 
+const OWNERSHIP_SOURCE_LABELS: Record<string, string> = {
+  merged_inheritance: "Merged inheritance",
+  grouping_block: "Grouping block",
+  column_header: "Column header",
+  direct_label: "Direct label",
+  positional: "Positional",
+  inferred_fallback: "Inferred fallback",
+  none: "Unresolved",
+  not_applicable: "N/A",
+};
+
+function Metric({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+  return (
+    <div
+      className={cn(
+        "rounded-md border px-2 py-1.5",
+        ok
+          ? "border-emerald-300/40 bg-emerald-100/30 text-emerald-900 dark:border-emerald-400/30 dark:bg-emerald-900/20 dark:text-emerald-200"
+          : "border-amber-300/40 bg-amber-100/30 text-amber-900 dark:border-amber-400/30 dark:bg-amber-900/20 dark:text-amber-200",
+      )}
+    >
+      <div className="text-[11px] uppercase tracking-wide opacity-80">{label}</div>
+      <div className="mt-0.5 text-base font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
 export function SemanticDiagnosticsPanel({
   diagnostics,
   mapping,
@@ -77,7 +104,21 @@ export function SemanticDiagnosticsPanel({
   }, [diagnostics, mapping]);
 
   const trustedCount = confidenceCounts.explicit + confidenceCounts.inferred;
-  const trustedShare = factCount > 0 ? Math.round((trustedCount / factCount) * 100) : 0;
+  const trustedShare =
+    typeof diagnostics?.trust_ratio === "number"
+      ? Math.round(diagnostics.trust_ratio * 100)
+      : factCount > 0
+        ? Math.round((trustedCount / factCount) * 100)
+        : 0;
+  const explicitShare =
+    factCount > 0 ? Math.round((confidenceCounts.explicit / factCount) * 100) : 0;
+  const ambiguousShare =
+    factCount > 0 ? Math.round((confidenceCounts.ambiguous / factCount) * 100) : 0;
+  const unmappedShare =
+    factCount > 0 ? Math.round((confidenceCounts.unmapped / factCount) * 100) : 0;
+
+  const ownershipConflicts = diagnostics?.ownership_conflicts ?? [];
+  const ownershipSources = diagnostics?.ownership_sources ?? {};
 
   const sortedIssues = useMemo(() => {
     if (!diagnostics?.issues) {
@@ -181,12 +222,41 @@ export function SemanticDiagnosticsPanel({
       </div>
 
       {factCount > 0 && (
-        <div className="mt-2 text-[11px] text-muted-foreground">
-          Trust ratio:{" "}
-          <span className="font-medium text-foreground">{trustedShare}%</span>
-          {" — "}
-          {trustedCount} of {factCount} fact{factCount === 1 ? "" : "s"} mapped
-          explicitly or with strong inference.
+        <div className="mt-3 rounded-md border bg-background/40 p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Semantic health
+            </span>
+            <span className="text-[11px] text-muted-foreground">
+              Targets: trust ≥ 95% · explicit &gt; 80% · ambiguous &lt; 5%
+            </span>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Metric
+              label="Trust ratio"
+              value={`${trustedShare}%`}
+              ok={trustedShare >= 95}
+            />
+            <Metric
+              label="Explicit"
+              value={`${explicitShare}%`}
+              ok={explicitShare > 80}
+            />
+            <Metric
+              label="Ambiguous"
+              value={`${ambiguousShare}%`}
+              ok={ambiguousShare < 5}
+            />
+            <Metric
+              label="Unmapped"
+              value={`${unmappedShare}%`}
+              ok={unmappedShare < 5}
+            />
+          </div>
+          <div className="mt-2 text-[11px] text-muted-foreground">
+            {trustedCount} of {factCount} fact{factCount === 1 ? "" : "s"} mapped
+            explicitly or with strong inference.
+          </div>
         </div>
       )}
 
@@ -210,6 +280,71 @@ export function SemanticDiagnosticsPanel({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {Object.keys(ownershipSources).length > 0 && (
+        <div className="mt-3 border-t pt-2">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Ownership sources
+          </div>
+          <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+            {(["unit", "buyer", "metric", "section"] as const).map((dimension) => {
+              const counts = ownershipSources[dimension];
+              if (!counts || Object.keys(counts).length === 0) {
+                return null;
+              }
+              return (
+                <div className="rounded-sm border bg-background/60 px-2 py-1.5" key={dimension}>
+                  <div className="text-[11px] font-medium capitalize text-foreground">
+                    {dimension}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {Object.entries(counts)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([source, count]) => (
+                        <span
+                          className="rounded-sm border bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                          key={source}
+                          title={source}
+                        >
+                          {OWNERSHIP_SOURCE_LABELS[source] ?? source}
+                          {" · "}
+                          <span className="font-mono text-foreground">{count}</span>
+                        </span>
+                      ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {ownershipConflicts.length > 0 && (
+        <div className="mt-3 border-t pt-2">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Ownership conflicts
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {ownershipConflicts.slice(0, 12).map((conflict, index) => (
+              <span
+                className="rounded-sm border bg-background/70 px-1.5 py-1 text-[11px] text-foreground"
+                key={`${conflict.cell_address ?? "?"}-${index}`}
+                title={(conflict.problems ?? []).join(", ")}
+              >
+                {conflict.sheet_name ? `${conflict.sheet_name} ` : ""}
+                <span className="font-mono">{conflict.cell_address ?? "?"}</span>
+                {" · "}
+                {(conflict.problems ?? []).join(", ")}
+              </span>
+            ))}
+            {ownershipConflicts.length > 12 && (
+              <span className="text-[11px] text-muted-foreground">
+                +{ownershipConflicts.length - 12} more
+              </span>
+            )}
+          </div>
         </div>
       )}
 

@@ -292,6 +292,110 @@ export type OperationalSummaryResponse = {
   total: number;
 };
 
+// ---------------------------------------------------------------------------
+// Operational query layer (MD07-2)
+// ---------------------------------------------------------------------------
+
+export type OperationalAggregationRow = {
+  group: Record<string, string | number | null>;
+  numeric_total: string | number | null;
+  fact_count: number;
+  formula_count: number;
+  numeric_count: number;
+};
+
+export type OperationalAggregationTotals = {
+  numeric_total: string | number | null;
+  fact_count: number;
+  formula_count: number;
+  numeric_count: number;
+};
+
+export type OperationalAggregationResponse = {
+  group_by: string[];
+  rows: OperationalAggregationRow[];
+  totals: OperationalAggregationTotals;
+  total: number;
+};
+
+export type OperationalTrendPoint = {
+  report_date: string;
+  numeric_total: string | number | null;
+  fact_count: number;
+  numeric_count: number;
+};
+
+export type OperationalTrendResponse = {
+  metric_key: string;
+  buyer: string | null;
+  unit: string | null;
+  operational_section: string | null;
+  points: OperationalTrendPoint[];
+  total: number;
+};
+
+export type OperationalComparisonTotals = {
+  numeric_total: string | number | null;
+  fact_count: number;
+  numeric_count: number;
+};
+
+export type OperationalComparisonResponse = {
+  metric_key: string;
+  buyer: string | null;
+  unit: string | null;
+  operational_section: string | null;
+  current_date: string;
+  previous_date: string | null;
+  current: OperationalComparisonTotals;
+  previous: OperationalComparisonTotals;
+  delta: string | number | null;
+  delta_percent: number | null;
+  direction: "up" | "down" | "flat";
+};
+
+export type OperationalDimensionOption = {
+  value: string;
+  label: string;
+};
+
+export type OperationalDimensionsResponse = {
+  buyers: OperationalDimensionOption[];
+  units: OperationalDimensionOption[];
+  metrics: OperationalDimensionOption[];
+  sections: OperationalDimensionOption[];
+  dates: OperationalDimensionOption[];
+};
+
+export type OperationalFactTraceWorkbook = {
+  uploaded_file_id: string;
+  original_filename: string | null;
+  storage_bucket: string | null;
+  storage_path: string | null;
+  report_type_id: string | null;
+  buyer_id: string | null;
+  unit_id: string | null;
+  uploaded_at: string | null;
+  workbook_source: Record<string, unknown>;
+};
+
+export type OperationalFactTraceResponse = {
+  fact: OperationalFact;
+  workbook: OperationalFactTraceWorkbook;
+  sheet_name: string;
+  sheet_index: number | null;
+  cell_address: string;
+  operational_section: string;
+  operational_section_label: string;
+  source_region_id: string | null;
+  source_region_kind: string | null;
+  source_region_range: string | null;
+  extraction_confidence: Record<string, unknown>;
+  extraction_source: string | null;
+  ownership?: SemanticOwnership;
+  upload_timestamp: string | null;
+};
+
 export type WorkbookSemanticRegion = {
   id: string;
   sheet_name: string;
@@ -315,6 +419,30 @@ export type SemanticConfidenceBand =
   | "inferred"
   | "ambiguous"
   | "unmapped";
+
+export type SemanticOwnershipSource =
+  | "merged_inheritance"
+  | "grouping_block"
+  | "column_header"
+  | "direct_label"
+  | "positional"
+  | "inferred_fallback"
+  | "none"
+  | "not_applicable"
+  | string;
+
+export type SemanticOwnership = {
+  unit_source?: SemanticOwnershipSource;
+  buyer_source?: SemanticOwnershipSource;
+  metric_source?: SemanticOwnershipSource;
+  section_source?: SemanticOwnershipSource;
+  is_rollup?: boolean;
+  table_header_row?: number;
+  table_range?: string;
+  metric_column?: number;
+  buyer_column?: number | null;
+  unit_column?: number | null;
+};
 
 export type SemanticMappingConfidence = {
   overall: SemanticConfidenceBand;
@@ -382,6 +510,18 @@ export type SemanticDiagnostics = {
     missing_fields?: string[];
     metric_key?: string | null;
   }>;
+  ownership_conflicts?: Array<{
+    sheet_name?: string | null;
+    cell_address?: string | null;
+    metric_key?: string | null;
+    metric_label?: string | null;
+    buyer?: string | null;
+    unit?: string | null;
+    operational_section?: string | null;
+    problems?: string[];
+  }>;
+  ownership_sources?: Record<string, Record<string, number>>;
+  trust_ratio?: number;
   issues: SemanticIssue[];
   health: "ok" | "warning" | "error";
 };
@@ -418,6 +558,7 @@ export type WorkbookSemanticFact = Partial<OperationalFact> & {
   source_column_number: number;
   metadata?: {
     mapping_confidence?: SemanticMappingConfidence;
+    ownership?: SemanticOwnership;
     traceability?: Record<string, unknown>;
     normalization?: Record<string, string>;
     engine?: string;

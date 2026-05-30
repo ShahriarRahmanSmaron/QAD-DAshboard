@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -21,8 +22,19 @@ from app.reporting.models import (
 )
 from app.reporting.schemas import (
     BulkReportSaveRequest,
+    OperationalAggregationResponse,
+    OperationalAggregationRow,
+    OperationalAggregationTotals,
+    OperationalComparisonResponse,
+    OperationalComparisonTotals,
+    OperationalDimensionOption,
+    OperationalDimensionsResponse,
     OperationalFactResponse,
+    OperationalFactTraceResponse,
+    OperationalFactTraceWorkbook,
     OperationalSummaryRow,
+    OperationalTrendPoint,
+    OperationalTrendResponse,
     ReportCreateRequest,
     ReportMetricCreateRequest,
     ReportMetricResponse,
@@ -132,6 +144,187 @@ def serialize_operational_summary_row(row: dict[str, Any]) -> OperationalSummary
         fact_count=row.get("fact_count", 0),
         numeric_total=row.get("numeric_total"),
         formula_count=row.get("formula_count", 0),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Operational query layer serializers (MD07-2)
+# ---------------------------------------------------------------------------
+
+_AGGREGATION_KEYS = ("buyer", "unit", "metric", "section", "report_date", "report_type", "workbook")
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def serialize_operational_aggregation(
+    *,
+    group_by: list[str],
+    rows: list[dict[str, Any]],
+    overall: dict[str, Any],
+) -> OperationalAggregationResponse:
+    aggregation_rows: list[OperationalAggregationRow] = []
+    for row in rows:
+        group: dict[str, Any] = {}
+        for key in group_by:
+            if key not in row:
+                continue
+            value = row[key]
+            if isinstance(value, date):
+                group[key] = value.isoformat()
+            elif isinstance(value, UUID):
+                group[key] = str(value)
+            else:
+                group[key] = value
+        aggregation_rows.append(
+            OperationalAggregationRow(
+                group=group,
+                numeric_total=_decimal_or_none(row.get("numeric_total")),
+                fact_count=int(row.get("fact_count", 0) or 0),
+                formula_count=int(row.get("formula_count", 0) or 0),
+                numeric_count=int(row.get("numeric_count", 0) or 0),
+            )
+        )
+    return OperationalAggregationResponse(
+        group_by=group_by,
+        rows=aggregation_rows,
+        totals=OperationalAggregationTotals(
+            numeric_total=_decimal_or_none(overall.get("numeric_total")),
+            fact_count=int(overall.get("fact_count", 0) or 0),
+            formula_count=int(overall.get("formula_count", 0) or 0),
+            numeric_count=int(overall.get("numeric_count", 0) or 0),
+        ),
+        total=len(aggregation_rows),
+    )
+
+
+def serialize_operational_trend(
+    *,
+    metric_key: str,
+    buyer: str | None,
+    unit: str | None,
+    operational_section: str | None,
+    rows: list[dict[str, Any]],
+) -> OperationalTrendResponse:
+    points = [
+        OperationalTrendPoint(
+            report_date=row["report_date"],
+            numeric_total=_decimal_or_none(row.get("numeric_total")),
+            fact_count=int(row.get("fact_count", 0) or 0),
+            numeric_count=int(row.get("numeric_count", 0) or 0),
+        )
+        for row in rows
+        if row.get("report_date") is not None
+    ]
+    return OperationalTrendResponse(
+        metric_key=metric_key,
+        buyer=buyer,
+        unit=unit,
+        operational_section=operational_section,
+        points=points,
+        total=len(points),
+    )
+
+
+def serialize_operational_comparison(comparison: dict[str, Any]) -> OperationalComparisonResponse:
+    current = comparison.get("current") or {}
+    previous = comparison.get("previous") or {}
+    current_total = _decimal_or_none(current.get("numeric_total"))
+    previous_total = _decimal_or_none(previous.get("numeric_total"))
+
+    delta: Decimal | None = None
+    delta_percent: float | None = None
+    direction = "flat"
+    if current_total is not None and previous_total is not None:
+        delta = current_total - previous_total
+        if previous_total != 0:
+            delta_percent = float(delta / previous_total * 100)
+        if delta > 0:
+            direction = "up"
+        elif delta < 0:
+            direction = "down"
+
+    return OperationalComparisonResponse(
+        metric_key=comparison["metric_key"],
+        buyer=comparison.get("buyer"),
+        unit=comparison.get("unit"),
+        operational_section=comparison.get("operational_section"),
+        current_date=comparison["current_date"],
+        previous_date=comparison.get("previous_date"),
+        current=OperationalComparisonTotals(
+            numeric_total=current_total,
+            fact_count=int(current.get("fact_count", 0) or 0),
+            numeric_count=int(current.get("numeric_count", 0) or 0),
+        ),
+        previous=OperationalComparisonTotals(
+            numeric_total=previous_total,
+            fact_count=int(previous.get("fact_count", 0) or 0),
+            numeric_count=int(previous.get("numeric_count", 0) or 0),
+        ),
+        delta=delta,
+        delta_percent=delta_percent,
+        direction=direction,
+    )
+
+
+def serialize_operational_dimensions(
+    data: dict[str, list[dict[str, Any]]],
+) -> OperationalDimensionsResponse:
+    def _options(rows: list[dict[str, Any]]) -> list[OperationalDimensionOption]:
+        return [
+            OperationalDimensionOption(value=str(row["value"]), label=str(row["label"]))
+            for row in rows
+        ]
+
+    return OperationalDimensionsResponse(
+        buyers=_options(data.get("buyers", [])),
+        units=_options(data.get("units", [])),
+        metrics=_options(data.get("metrics", [])),
+        sections=_options(data.get("sections", [])),
+        dates=_options(data.get("dates", [])),
+    )
+
+
+def serialize_operational_fact_trace(fact: OperationalFact) -> OperationalFactTraceResponse:
+    uploaded_file = fact.uploaded_file
+    raw_metadata = fact.metadata_ if isinstance(fact.metadata_, dict) else {}
+    confidence = raw_metadata.get("mapping_confidence")
+    extraction_confidence = confidence if isinstance(confidence, dict) else {}
+    extraction_source = raw_metadata.get("engine")
+    ownership = raw_metadata.get("ownership")
+    ownership_payload = ownership if isinstance(ownership, dict) else {}
+
+    workbook = OperationalFactTraceWorkbook(
+        uploaded_file_id=fact.uploaded_file_id,
+        original_filename=uploaded_file.original_filename if uploaded_file else None,
+        storage_bucket=uploaded_file.storage_bucket if uploaded_file else None,
+        storage_path=uploaded_file.storage_path if uploaded_file else None,
+        report_type_id=uploaded_file.report_type_id if uploaded_file else None,
+        buyer_id=uploaded_file.buyer_id if uploaded_file else None,
+        unit_id=uploaded_file.unit_id if uploaded_file else None,
+        uploaded_at=uploaded_file.created_at if uploaded_file else None,
+        workbook_source=fact.workbook_source if isinstance(fact.workbook_source, dict) else {},
+    )
+    return OperationalFactTraceResponse(
+        fact=serialize_operational_fact(fact),
+        workbook=workbook,
+        sheet_name=fact.source_sheet_name,
+        sheet_index=fact.source_sheet_index,
+        cell_address=fact.source_cell_address,
+        operational_section=fact.operational_section,
+        operational_section_label=fact.operational_section_label,
+        source_region_id=fact.source_region_id,
+        source_region_kind=fact.source_region_kind,
+        source_region_range=fact.source_region_range,
+        extraction_confidence=extraction_confidence,
+        extraction_source=extraction_source,
+        ownership=ownership_payload,
+        upload_timestamp=uploaded_file.created_at if uploaded_file else None,
     )
 
 

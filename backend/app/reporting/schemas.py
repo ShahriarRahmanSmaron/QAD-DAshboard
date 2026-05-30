@@ -323,6 +323,123 @@ class OperationalSummaryResponse(BaseModel):
     total: int
 
 
+# ---------------------------------------------------------------------------
+# Operational query layer (MD07-2)
+# ---------------------------------------------------------------------------
+
+
+class OperationalAggregationRow(BaseModel):
+    """A grouped aggregation bucket.
+
+    ``group`` holds the value of each requested grouping dimension keyed by the
+    dimension name (e.g. ``{"buyer": "NEXT", "unit": "HTL-02"}``).
+    """
+
+    group: JsonObject = Field(default_factory=dict)
+    numeric_total: Decimal | None = None
+    fact_count: int = 0
+    formula_count: int = 0
+    numeric_count: int = 0
+
+
+class OperationalAggregationTotals(BaseModel):
+    numeric_total: Decimal | None = None
+    fact_count: int = 0
+    formula_count: int = 0
+    numeric_count: int = 0
+
+
+class OperationalAggregationResponse(BaseModel):
+    group_by: list[str] = Field(default_factory=list)
+    rows: list[OperationalAggregationRow] = Field(default_factory=list)
+    totals: OperationalAggregationTotals
+    total: int = 0
+
+
+class OperationalTrendPoint(BaseModel):
+    report_date: date
+    numeric_total: Decimal | None = None
+    fact_count: int = 0
+    numeric_count: int = 0
+
+
+class OperationalTrendResponse(BaseModel):
+    metric_key: str
+    buyer: str | None = None
+    unit: str | None = None
+    operational_section: str | None = None
+    points: list[OperationalTrendPoint] = Field(default_factory=list)
+    total: int = 0
+
+
+class OperationalComparisonTotals(BaseModel):
+    numeric_total: Decimal | None = None
+    fact_count: int = 0
+    numeric_count: int = 0
+
+
+class OperationalComparisonResponse(BaseModel):
+    metric_key: str
+    buyer: str | None = None
+    unit: str | None = None
+    operational_section: str | None = None
+    current_date: date
+    previous_date: date | None = None
+    current: OperationalComparisonTotals
+    previous: OperationalComparisonTotals
+    delta: Decimal | None = None
+    delta_percent: float | None = None
+    direction: str = "flat"
+
+
+class OperationalDimensionOption(BaseModel):
+    value: str
+    label: str
+
+
+class OperationalDimensionsResponse(BaseModel):
+    buyers: list[OperationalDimensionOption] = Field(default_factory=list)
+    units: list[OperationalDimensionOption] = Field(default_factory=list)
+    metrics: list[OperationalDimensionOption] = Field(default_factory=list)
+    sections: list[OperationalDimensionOption] = Field(default_factory=list)
+    dates: list[OperationalDimensionOption] = Field(default_factory=list)
+
+
+class OperationalFactTraceWorkbook(BaseModel):
+    uploaded_file_id: UUID
+    original_filename: str | None = None
+    storage_bucket: str | None = None
+    storage_path: str | None = None
+    report_type_id: UUID | None = None
+    buyer_id: UUID | None = None
+    unit_id: UUID | None = None
+    uploaded_at: datetime | None = None
+    workbook_source: JsonObject = Field(default_factory=dict)
+
+
+class OperationalFactTraceResponse(BaseModel):
+    """Full traceability bundle for a single operational fact (MD07-2).
+
+    Lets the UI click a semantic fact and trace it back to its workbook,
+    sheet, cell, and section, with extraction confidence and timestamps.
+    """
+
+    fact: OperationalFactResponse
+    workbook: OperationalFactTraceWorkbook
+    sheet_name: str
+    sheet_index: int | None = None
+    cell_address: str
+    operational_section: str
+    operational_section_label: str
+    source_region_id: str | None = None
+    source_region_kind: str | None = None
+    source_region_range: str | None = None
+    extraction_confidence: JsonObject = Field(default_factory=dict)
+    extraction_source: str | None = None
+    ownership: JsonObject = Field(default_factory=dict)
+    upload_timestamp: datetime | None = None
+
+
 class WorkbookSemanticRegionResponse(BaseModel):
     id: str
     sheet_name: str
@@ -363,6 +480,9 @@ class SemanticDiagnosticsResponse(BaseModel):
     duplicate_facts: list[JsonObject] = Field(default_factory=list)
     orphan_cells: list[JsonObject] = Field(default_factory=list)
     missing_workbook_references: list[JsonObject] = Field(default_factory=list)
+    ownership_conflicts: list[JsonObject] = Field(default_factory=list)
+    ownership_sources: dict[str, dict[str, int]] = Field(default_factory=dict)
+    trust_ratio: float = 0.0
     issues: list[SemanticIssueResponse] = Field(default_factory=list)
     health: str = "ok"
 

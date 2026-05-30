@@ -1,8 +1,13 @@
 import type {
   BulkReportSavePayload,
   BuyerListResponse,
+  OperationalAggregationResponse,
+  OperationalComparisonResponse,
+  OperationalDimensionsResponse,
   OperationalFactListResponse,
+  OperationalFactTraceResponse,
   OperationalSummaryResponse,
+  OperationalTrendResponse,
   Report,
   ReportCreatePayload,
   ReportListResponse,
@@ -122,16 +127,35 @@ export type OperationalQueryParams = {
   uploaded_file_id?: string;
   buyer?: string;
   unit?: string;
+  buyer_id?: string;
+  unit_id?: string;
   metric?: string;
+  section?: string;
+  report_type_id?: string;
   report_date?: string;
+  date_from?: string;
+  date_to?: string;
+  value_min?: string | number;
+  value_max?: string | number;
+  value_type?: string;
+  search?: string;
   page?: number;
   page_size?: number;
 };
 
-function operationalParams(params: OperationalQueryParams = {}) {
+function operationalParams(params: Record<string, unknown> = {}) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null || value === "") {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item === undefined || item === null || item === "") {
+          continue;
+        }
+        query.append(key, String(item));
+      }
       continue;
     }
     query.set(key, String(value));
@@ -173,6 +197,63 @@ export function getOperationalSummary(
   const query = operationalParams(params);
   return request<OperationalSummaryResponse>(
     `/api/reports/operations/summary${query ? `?${query}` : ""}`,
+  );
+}
+
+export type OperationalAggregationParams = Omit<
+  OperationalQueryParams,
+  "page" | "page_size"
+> & {
+  group_by?: string[];
+};
+
+export function getOperationalAggregation(params: OperationalAggregationParams = {}) {
+  const query = operationalParams(params);
+  return request<OperationalAggregationResponse>(
+    `/api/reports/operations/aggregate${query ? `?${query}` : ""}`,
+  );
+}
+
+export type OperationalTrendParams = {
+  metric: string;
+  buyer?: string;
+  unit?: string;
+  section?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+};
+
+export function getOperationalTrend(params: OperationalTrendParams) {
+  const query = operationalParams(params);
+  return request<OperationalTrendResponse>(
+    `/api/reports/operations/trend${query ? `?${query}` : ""}`,
+  );
+}
+
+export type OperationalComparisonParams = {
+  metric: string;
+  current_date: string;
+  previous_date?: string;
+  buyer?: string;
+  unit?: string;
+  section?: string;
+};
+
+export function getOperationalComparison(params: OperationalComparisonParams) {
+  const query = operationalParams(params);
+  return request<OperationalComparisonResponse>(
+    `/api/reports/operations/comparison${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getOperationalDimensions() {
+  return request<OperationalDimensionsResponse>("/api/reports/operations/dimensions");
+}
+
+export function traceOperationalFact(factId: string) {
+  return request<OperationalFactTraceResponse>(
+    `/api/reports/operations/facts/${factId}/trace`,
   );
 }
 

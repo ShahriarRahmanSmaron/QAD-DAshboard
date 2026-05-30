@@ -924,6 +924,23 @@ function SemanticBreakdownPanel({
   const buyerCount = new Set(mapping.facts.map((fact) => fact.buyer).filter(Boolean)).size;
   const unitCount = new Set(mapping.facts.map((fact) => fact.unit).filter(Boolean)).size;
   const formulaCount = mapping.facts.filter((fact) => fact.is_formula).length;
+
+  // Detected entities for the selected sheet, derived purely from the
+  // extracted facts (no hardcoded vocabulary) — MD07-2A debug overlay.
+  const detectedUnits = Array.from(
+    new Set(selectedFacts.map((fact) => fact.unit).filter((value): value is string => Boolean(value))),
+  ).sort();
+  const detectedBuyers = Array.from(
+    new Set(selectedFacts.map((fact) => fact.buyer).filter((value): value is string => Boolean(value))),
+  ).sort();
+  const detectedMetrics = Array.from(
+    new Map(selectedFacts.map((fact) => [fact.metric_key, fact.metric_label])).values(),
+  ).sort();
+  const detectedSections = Array.from(
+    new Map(
+      selectedFacts.map((fact) => [fact.operational_section, fact.operational_section_label]),
+    ).values(),
+  ).sort();
   const summaryRows = [...(mapping.summary?.rows ?? [])]
     .sort((left, right) => {
       const leftTotal = Number(left.numeric_total ?? 0);
@@ -967,6 +984,46 @@ function SemanticBreakdownPanel({
               {label}
             </div>
             <div className="mt-0.5 text-base font-semibold tabular-nums">{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {(
+          [
+            ["Units", detectedUnits],
+            ["Buyers", detectedBuyers],
+            ["Metrics", detectedMetrics],
+            ["Sections", detectedSections],
+          ] as const
+        ).map(([label, values]) => (
+          <div className="rounded-md border bg-background/60 p-2" key={label}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                {label}
+              </span>
+              <span className="font-mono text-[11px] text-muted-foreground">{values.length}</span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {values.length > 0 ? (
+                values.slice(0, 16).map((value) => (
+                  <span
+                    className="rounded-sm border bg-card/60 px-1.5 py-0.5 text-[10px] text-foreground"
+                    key={value}
+                    title={value}
+                  >
+                    {value}
+                  </span>
+                ))
+              ) : (
+                <span className="text-[11px] text-muted-foreground">None detected</span>
+              )}
+              {values.length > 16 && (
+                <span className="text-[10px] text-muted-foreground">
+                  +{values.length - 16}
+                </span>
+              )}
+            </div>
           </div>
         ))}
       </div>

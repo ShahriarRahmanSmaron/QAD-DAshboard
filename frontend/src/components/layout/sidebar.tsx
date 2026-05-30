@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
 import {
   ClipboardCheck,
+  Database,
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
@@ -26,6 +27,12 @@ const navigation = [
     label: "Report Grid",
     href: "/reports/grid",
     icon: ClipboardCheck,
+    roles: ["admin", "editor", "viewer"],
+  },
+  {
+    label: "Operational Query",
+    href: "/reports/operations",
+    icon: Database,
     roles: ["admin", "editor", "viewer"],
   },
   {

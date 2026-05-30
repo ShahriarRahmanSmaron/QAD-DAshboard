@@ -47,97 +47,213 @@ def slugify(value: str | None) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Buyer normalization
+# Structural label vocabulary (workbook-agnostic)
 # ---------------------------------------------------------------------------
 
-# Known buyer aliases observed in WF Test/Shade workbooks. The list is small
-# on purpose — we want repeatable canonicalization without requiring a full
-# directory lookup. Anything missing falls back to a cleaned, title-cased
-# version of the source text.
-_BUYER_CANONICAL: dict[str, str] = {
-    "next": "NEXT",
-    "next sourcing": "NEXT",
-    "h&m": "H&M",
-    "hnm": "H&M",
-    "h and m": "H&M",
-    "primark": "PRIMARK",
-    "zara": "ZARA",
-    "inditex": "ZARA",
-    "marks and spencer": "M&S",
-    "m&s": "M&S",
-    "ms": "M&S",
-    "tesco": "TESCO",
-    "asda": "ASDA",
-    "lidl": "LIDL",
-    "aldi": "ALDI",
-    "walmart": "WALMART",
-    "uniqlo": "UNIQLO",
-    "decathlon": "DECATHLON",
-    "c&a": "C&A",
-    "ca": "C&A",
-    "kiabi": "KIABI",
-    "lc waikiki": "LC WAIKIKI",
-    "lcw": "LC WAIKIKI",
-}
-
-_BUYER_BLOCKLIST: frozenset[str] = frozenset(
+# These tokens describe *structural* labels that appear in operational
+# workbooks regardless of the business domain — header captions, total/summary
+# markers, and bookkeeping columns. They are intentionally NOT business values
+# (no buyer names, no unit names, no metric names). They let the engine reject
+# obvious non-entity text (e.g. a literal ``TOTAL`` cell or a ``BUYER`` header
+# leaking into a data row) without encoding any specific workbook's vocabulary.
+_STRUCTURAL_LABEL_TOKENS: frozenset[str] = frozenset(
     {
         "",
         "total",
+        "totals",
         "grand total",
+        "sub total",
         "subtotal",
+        "sum",
         "summary",
         "buyer",
+        "buyers",
         "unit",
+        "units",
         "qty",
         "quantity",
         "remarks",
+        "remark",
         "date",
+        "report date",
         "no",
         "sl",
         "sl no",
-        "n/a",
+        "serial",
+        "n a",
         "na",
+        "nil",
+        "none",
     }
 )
 
+# Markers that indicate a row/label is a rollup or aggregate rather than an
+# entity. Detected as substrings of the normalized token.
+_ROLLUP_MARKERS: tuple[str, ...] = (
+    "total",
+    "grand total",
+    "sub total",
+    "subtotal",
+    "previous day",
+    "running day",
+    "closing",
+    "summary",
+)
+
+
+def is_structural_label(value: str | None) -> bool:
+    """``True`` when text is a structural caption/total, not a business entity."""
+    if value is None:
+        return False
+    token = normalize_token(str(value))
+    if token in _STRUCTURAL_LABEL_TOKENS:
+        return True
+    return any(marker in token for marker in _ROLLUP_MARKERS)
+
+
+def is_rollup_label(value: str | None) -> bool:
+    """``True`` when text marks an aggregate/rollup row (total, previous day…)."""
+    if value is None:
+        return False
+    token = normalize_token(str(value))
+    return any(marker in token for marker in _ROLLUP_MARKERS)
+
+
+# ---------------------------------------------------------------------------
+# Header role detection (column-role captions, not business values)
+# ---------------------------------------------------------------------------
+
+# Header captions that name a column's *role* as the buyer dimension or the
+# unit/grouping dimension. These are generic role words that operational
+# workbooks use to label their dimension columns. Matching a header against
+# these is a header-relationship signal — it never matches a business value,
+# only the caption a workbook author wrote to describe the column.
+_BUYER_HEADER_TOKENS: tuple[str, ...] = ("buyer", "customer", "client", "brand")
+_UNIT_HEADER_TOKENS: tuple[str, ...] = (
+    "unit",
+    "concern unit",
+    "factory",
+    "plant",
+    "line",
+    "block",
+)
+
+
+def header_names_buyer(header_text: str | None) -> bool:
+    """``True`` when a column header captions a buyer/entity dimension."""
+    if not header_text:
+        return False
+    token = normalize_token(str(header_text))
+    if not token:
+        return False
+    return any(
+        marker == token or f" {marker} " in f" {token} " for marker in _BUYER_HEADER_TOKENS
+    )
+
+
+def header_names_unit(header_text: str | None) -> bool:
+    """``True`` when a column header captions a unit/grouping dimension."""
+    if not header_text:
+        return False
+    token = normalize_token(str(header_text))
+    if not token:
+        return False
+    return any(
+        marker == token or f" {marker} " in f" {token} " for marker in _UNIT_HEADER_TOKENS
+    )
+
 
 def normalize_buyer(value: str | None) -> str | None:
-    """Return a canonical buyer name, or ``None`` if the value is ineligible."""
+    """Return a clean buyer entity name, or ``None`` if the value is ineligible.
+
+    The canonical form is derived purely from the source text — no business
+    name dictionary is consulted, so this works for any workbook. Composite
+    labels (e.g. a cell that accidentally joined two columns with a separator)
+    are rejected rather than concatenated.
+    """
     if value is None:
         return None
-    cleaned = collapse_whitespace(str(value).strip(" :-"))
+    cleaned = collapse_whitespace(str(value).strip(" :-\n\t"))
     if not cleaned or len(cleaned) > 64:
         return None
     token = normalize_token(cleaned)
-    if not token or token in _BUYER_BLOCKLIST or "total" in token:
+    if not token or is_structural_label(cleaned):
         return None
-    canonical = _BUYER_CANONICAL.get(token)
-    if canonical:
-        return canonical
+    # Reject composite labels: a buyer cell should describe a single entity.
+    # Separators like ``/`` or `` - `` joining multiple words signal that two
+    # ownership sources were merged, which must not become one buyer identity.
+    if _looks_composite(cleaned):
+        return None
     # Default canonical form: upper-case for short codes (≤4 chars), title
     # case otherwise. This stays stable across reuploads.
     return cleaned.upper() if len(cleaned) <= 4 else cleaned.title()
+
+
+def _looks_composite(value: str) -> bool:
+    """Detect labels that concatenate multiple ownership sources."""
+    # A slash or pipe separating non-trivial fragments → composite.
+    for separator in ("/", "|", "\\"):
+        if separator in value:
+            fragments = [frag.strip() for frag in value.split(separator) if frag.strip()]
+            if len(fragments) >= 2:
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------
 # Unit normalization
 # ---------------------------------------------------------------------------
 
-_UNIT_PATTERN = re.compile(
-    r"\b(?P<prefix>[A-Z]{2,6})[\s\-_]?(?P<number>\d{1,3})\b",
-    re.IGNORECASE,
+# A unit/grouping label is a compact block identifier. The grouping column
+# (detected via merge geometry or repeating-block structure) establishes that a
+# value *is* a unit, so normalization only canonicalizes the form and rejects
+# obvious non-entities — it does not gate on a fixed list of unit codes.
+_UNIT_NUMERIC_SUFFIX_RE = re.compile(r"^(?P<prefix>[A-Za-z]{1,8})[\s\-_]+(?P<number>\d{1,3})$")
+_UNIT_ALNUM_SUFFIX_RE = re.compile(
+    r"^(?P<prefix>[A-Za-z]{1,8})[\s\-_]+(?P<suffix>[A-Za-z0-9]{1,4})$"
 )
 
 
+def normalize_unit_label(value: str | None) -> str | None:
+    """Canonicalize a grouping-column label into a stable unit identifier.
+
+    Handles numeric suffixes (``HTL 02`` → ``HTL-02``) and alphanumeric
+    suffixes (``CCL A`` → ``CCL-A``) as well as bare codes (``MTL`` → ``MTL``).
+    Returns ``None`` for structural captions / rollup markers or values too
+    long to be a block code.
+    """
+    if value is None:
+        return None
+    text = collapse_whitespace(str(value).strip(" :-\n\t"))
+    if not text or is_structural_label(text):
+        return None
+    if len(text) > 32:
+        return None
+    numeric = _UNIT_NUMERIC_SUFFIX_RE.match(text)
+    if numeric:
+        return f"{numeric.group('prefix').upper()}-{int(numeric.group('number')):02d}"
+    alnum = _UNIT_ALNUM_SUFFIX_RE.match(text)
+    if alnum:
+        return f"{alnum.group('prefix').upper()}-{alnum.group('suffix').upper()}"
+    return text.upper()
+
+
 def normalize_unit(value: str | None) -> str | None:
-    """Map a free-form unit reference to ``PREFIX-NN`` (e.g. ``HTL-02``)."""
+    """Backward-compatible unit search: find a ``PREFIX-NN`` code in free text.
+
+    Retained for callers that scan arbitrary text. Prefer
+    :func:`normalize_unit_label` when the value is known to come from a
+    grouping/unit column.
+    """
     if value is None:
         return None
     text = str(value).strip()
     if not text:
         return None
-    match = _UNIT_PATTERN.search(text.upper())
+    match = re.search(
+        r"\b(?P<prefix>[A-Z]{2,6})[\s\-_]?(?P<number>\d{1,3})\b",
+        text.upper(),
+    )
     if not match:
         return None
     prefix = match.group("prefix").upper()
@@ -146,35 +262,65 @@ def normalize_unit(value: str | None) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Metric / section normalization
+# Metric / section normalization (derived from workbook headers, not a table)
 # ---------------------------------------------------------------------------
 
-# These keys mirror ``SECTION_DEFINITIONS`` in workbook_semantics so they stay
-# in sync. The mapping intentionally uses short, stable identifiers.
-_METRIC_LABEL: dict[str, str] = {
-    "wait_for_test": "Wait For Test",
-    "wait_for_rfd": "Wait for RFD",
-    "shade_test": "Shade/Test",
-    "t_stock": "T/Stock",
-    "hold": "Hold",
-    "closing_summary": "Closing Summary",
-    "previous_day": "Previous Day",
-    "grand_total": "Grand Total",
-    "buyer_wise_breakdown": "Buyer-wise breakdown",
-    "unit_wise_totals": "Unit-wise totals",
-    "unit": "Unit",
-    "operational_block": "Operational Block",
-}
+# Newlines and unit-of-measure annotations frequently appear in operational
+# headers, e.g. ``"WAIT FOR TEST\n(KG)"``. We strip a trailing parenthetical
+# annotation and collapse whitespace so the same column header produces a
+# stable metric label/key regardless of formatting noise — without encoding
+# any specific metric name.
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _clean_header_text(value: str) -> str:
+    text = collapse_whitespace(str(value).replace("\n", " ").replace("\r", " "))
+    # Strip one trailing parenthetical unit annotation, e.g. "(KG)".
+    previous = None
+    while previous != text:
+        previous = text
+        text = _TRAILING_PAREN_RE.sub("", text).strip()
+    return text.strip(" :-")
+
+
+def derive_metric_label(header_text: str | None) -> str:
+    """Title-case label derived from a workbook column header."""
+    if not header_text:
+        return "Unmapped"
+    cleaned = _clean_header_text(header_text)
+    if not cleaned:
+        return "Unmapped"
+    # Preserve all-caps short codes; otherwise Title Case for readability.
+    if len(cleaned) <= 4 and cleaned.isupper():
+        return cleaned
+    return cleaned.title()
+
+
+def derive_metric_key(header_text: str | None) -> str | None:
+    """Stable slug key derived from a workbook column header."""
+    if not header_text:
+        return None
+    return slugify(_clean_header_text(header_text))
+
+
+def normalize_section_label(value: str | None) -> str:
+    """Clean a section banner/title into a stable display label."""
+    if value is None:
+        return ""
+    return _clean_header_text(value)
 
 
 def canonical_metric_label(metric_key: str | None) -> str:
+    """Best-effort human label for a metric key when no header is available."""
     if not metric_key:
         return "Unmapped"
-    return _METRIC_LABEL.get(metric_key, metric_key.replace("_", " ").title())
+    return metric_key.replace("_", " ").title()
 
 
 def canonical_section_label(section_key: str | None) -> str:
-    return canonical_metric_label(section_key)
+    if not section_key:
+        return "Unmapped"
+    return section_key.replace("_", " ").title()
 
 
 # ---------------------------------------------------------------------------
@@ -295,10 +441,10 @@ def normalize_fact_dimensions(
     """Apply all normalization rules to a fact's dimension tuple."""
     return {
         "buyer": normalize_buyer(buyer),
-        "unit": normalize_unit(unit),
-        "metric_key": metric_key or "operational_block",
+        "unit": normalize_unit_label(unit) or normalize_unit(unit),
+        "metric_key": metric_key or "unmapped",
         "metric_label": canonical_metric_label(metric_key),
-        "operational_section": section_key or "operational_block",
+        "operational_section": section_key or "unmapped",
         "operational_section_label": canonical_section_label(section_key),
         "report_date": normalize_report_date(report_date),
     }

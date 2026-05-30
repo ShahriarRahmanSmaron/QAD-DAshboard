@@ -72,6 +72,9 @@ class SemanticDiagnostics:
     duplicate_facts: list[JsonObject]
     orphan_cells: list[JsonObject]
     missing_workbook_references: list[JsonObject]
+    ownership_conflicts: list[JsonObject]
+    ownership_sources: dict[str, dict[str, int]]
+    trust_ratio: float
     issues: list[SemanticIssue]
     health: str
 
@@ -86,6 +89,12 @@ class SemanticDiagnostics:
             "duplicate_facts": list(self.duplicate_facts),
             "orphan_cells": list(self.orphan_cells),
             "missing_workbook_references": list(self.missing_workbook_references),
+            "ownership_conflicts": list(self.ownership_conflicts),
+            "ownership_sources": {
+                dimension: dict(counts)
+                for dimension, counts in self.ownership_sources.items()
+            },
+            "trust_ratio": self.trust_ratio,
             "issues": [issue.to_json() for issue in self.issues],
             "health": self.health,
         }
@@ -195,13 +204,41 @@ def _detect_ambiguous_rows(facts: list[SemanticFact]) -> list[JsonObject]:
     return ambiguous
 
 
+def _fact_is_rollup(fact: SemanticFact) -> bool:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    ownership = metadata.get("ownership")
+    if isinstance(ownership, dict) and ownership.get("is_rollup"):
+        return True
+    return bool(fact.is_formula) or fact.calculated_state in {"formula", "calculated"}
+
+
+def _ownership_source(fact: SemanticFact, dimension: str) -> str | None:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    ownership = metadata.get("ownership")
+    if isinstance(ownership, dict):
+        value = ownership.get(f"{dimension}_source")
+        return str(value) if value else None
+    return None
+
+
 def _detect_duplicate_facts(facts: list[SemanticFact]) -> list[JsonObject]:
-    """Distinct cells producing identical (buyer, unit, date, metric) tuples."""
+    """Distinct *leaf* cells producing identical (buyer, unit, date, metric).
+
+    Rollup/aggregate cells are excluded — repeated subtotal or grand-total
+    cells legitimately share a (None, None, date, metric) signature and are not
+    duplicate operational facts. Only true leaf facts that carry a buyer or
+    unit are considered, so accidental ownership collisions surface without
+    false positives from totals.
+    """
     grouped: dict[tuple[str | None, str | None, str | None, str], list[SemanticFact]] = defaultdict(
         list
     )
     for fact in facts:
         if fact.value_numeric is None:
+            continue
+        if _fact_is_rollup(fact):
+            continue
+        if fact.buyer is None and fact.unit is None:
             continue
         grouped[
             (
@@ -304,6 +341,83 @@ def _detect_missing_workbook_references(extraction: SemanticExtraction) -> list[
     return missing
 
 
+def _detect_ownership_conflicts(facts: list[SemanticFact]) -> list[JsonObject]:
+    """Apply the MD07-2A semantic validation rules.
+
+    Flags facts whose mapping_confidence reasons indicate a structural
+    ownership problem:
+
+    * ``buyer_equals_unit`` — a unit value was rejected as a buyer
+    * ``unit_unmapped`` — a leaf row is missing its governing unit
+    * ``buyer_unmapped`` / ``metric_missing_header`` — missing ownership
+
+    Composite buyer labels never reach here because ``normalize_buyer`` rejects
+    them up front, but if one slipped through (contains a separator) it is also
+    reported.
+    """
+    conflicts: list[JsonObject] = []
+    for fact in facts:
+        metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+        confidence = metadata.get("mapping_confidence")
+        reasons = (
+            confidence.get("reasons", []) if isinstance(confidence, dict) else []
+        )
+        problems: list[str] = []
+        if "buyer_equals_unit" in reasons:
+            problems.append("unit_classified_as_buyer")
+        if "unit_unmapped" in reasons and not _fact_is_rollup(fact):
+            problems.append("missing_unit_ownership")
+        if "metric_missing_header" in reasons:
+            problems.append("missing_metric_ownership")
+        if fact.buyer and ("/" in fact.buyer or "|" in fact.buyer):
+            problems.append("composite_buyer_label")
+        if not problems:
+            continue
+        conflicts.append(
+            {
+                "sheet_name": fact.source_sheet_name,
+                "cell_address": fact.source_cell_address,
+                "metric_key": fact.metric_key,
+                "metric_label": fact.metric_label,
+                "buyer": fact.buyer,
+                "unit": fact.unit,
+                "operational_section": fact.operational_section,
+                "problems": problems,
+            }
+        )
+    return conflicts
+
+
+def _ownership_source_breakdown(facts: list[SemanticFact]) -> dict[str, dict[str, int]]:
+    """Count, per dimension, which structural source resolved ownership.
+
+    Lets the UI explain *why* a fact was mapped (merged inheritance vs column
+    header vs direct label vs positional fallback) — MD07-2A diagnostics
+    requirement.
+    """
+    dimensions = ("unit", "buyer", "metric", "section")
+    breakdown: dict[str, Counter[str]] = {dimension: Counter() for dimension in dimensions}
+    for fact in facts:
+        metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+        ownership = metadata.get("ownership")
+        if not isinstance(ownership, dict):
+            continue
+        for dimension in dimensions:
+            source = ownership.get(f"{dimension}_source")
+            if source:
+                breakdown[dimension][str(source)] += 1
+    return {dimension: dict(counter) for dimension, counter in breakdown.items()}
+
+
+def _trust_ratio(confidence_counts: dict[str, int], fact_count: int) -> float:
+    if fact_count <= 0:
+        return 0.0
+    trusted = confidence_counts.get(CONFIDENCE_EXPLICIT, 0) + confidence_counts.get(
+        CONFIDENCE_INFERRED, 0
+    )
+    return round(trusted / fact_count, 4)
+
+
 def _build_issues(
     *,
     extraction: SemanticExtraction,
@@ -313,6 +427,7 @@ def _build_issues(
     duplicate_facts: list[JsonObject],
     orphan_cells: list[JsonObject],
     missing_workbook_references: list[JsonObject],
+    ownership_conflicts: list[JsonObject],
 ) -> list[SemanticIssue]:
     issues: list[SemanticIssue] = []
 
@@ -326,6 +441,32 @@ def _build_issues(
                     "review buyer/unit/metric inference."
                 ),
                 occurrences=confidence_counts[CONFIDENCE_AMBIGUOUS],
+            )
+        )
+
+    # Ownership conflicts are the headline MD07-2A signal: a unit classified as
+    # a buyer, a composite buyer label, or missing unit/metric ownership.
+    if ownership_conflicts:
+        def _problems(conflict: JsonObject) -> list[str]:
+            raw = conflict.get("problems")
+            return [str(item) for item in raw] if isinstance(raw, list) else []
+
+        unit_as_buyer = sum(
+            1 for c in ownership_conflicts if "unit_classified_as_buyer" in _problems(c)
+        )
+        composite = sum(
+            1 for c in ownership_conflicts if "composite_buyer_label" in _problems(c)
+        )
+        severity = SEVERITY_WARNING if (unit_as_buyer or composite) else SEVERITY_INFO
+        issues.append(
+            SemanticIssue(
+                code="semantic.ownership_conflicts",
+                severity=severity,
+                message=(
+                    f"{len(ownership_conflicts)} fact(s) have an ownership conflict "
+                    f"({unit_as_buyer} unit-as-buyer, {composite} composite buyer)."
+                ),
+                occurrences=len(ownership_conflicts),
             )
         )
 
@@ -349,7 +490,7 @@ def _build_issues(
                 severity=SEVERITY_WARNING,
                 message=(
                     f"{len(duplicate_facts)} duplicate (buyer, unit, date, metric) signature(s) "
-                    "detected across distinct cells."
+                    "detected across distinct leaf cells."
                 ),
                 occurrences=len(duplicate_facts),
             )
@@ -428,6 +569,9 @@ def build_semantic_diagnostics(
     duplicate_facts = _detect_duplicate_facts(facts)
     orphan_cells = _detect_orphan_cells(workbook_metadata, extraction)
     missing_workbook_references = _detect_missing_workbook_references(extraction)
+    ownership_conflicts = _detect_ownership_conflicts(facts)
+    ownership_sources = _ownership_source_breakdown(facts)
+    trust_ratio = _trust_ratio(confidence_counts, len(facts))
 
     issues = _build_issues(
         extraction=extraction,
@@ -437,6 +581,7 @@ def build_semantic_diagnostics(
         duplicate_facts=duplicate_facts,
         orphan_cells=orphan_cells,
         missing_workbook_references=missing_workbook_references,
+        ownership_conflicts=ownership_conflicts,
     )
 
     return SemanticDiagnostics(
@@ -449,6 +594,9 @@ def build_semantic_diagnostics(
         duplicate_facts=duplicate_facts,
         orphan_cells=orphan_cells,
         missing_workbook_references=missing_workbook_references,
+        ownership_conflicts=ownership_conflicts,
+        ownership_sources=ownership_sources,
+        trust_ratio=trust_ratio,
         issues=issues,
         health=_compute_health(issues),
     )

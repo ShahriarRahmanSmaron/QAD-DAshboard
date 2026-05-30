@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
@@ -11,10 +12,16 @@ from app.auth.dependencies import require_permission, require_role
 from app.auth.schemas import AuthUser
 from app.db.session import get_db_session
 from app.reporting import repository
+from app.reporting.repository import OperationalFactFilters
 from app.reporting.schemas import (
     BulkReportSaveRequest,
+    OperationalAggregationResponse,
+    OperationalComparisonResponse,
+    OperationalDimensionsResponse,
     OperationalFactListResponse,
+    OperationalFactTraceResponse,
     OperationalSummaryResponse,
+    OperationalTrendResponse,
     ReportCreateRequest,
     ReportListResponse,
     ReportMetricCreateRequest,
@@ -36,8 +43,13 @@ from app.reporting.service import (
     create_report_metric,
     create_report_row,
     serialize_metric,
+    serialize_operational_aggregation,
+    serialize_operational_comparison,
+    serialize_operational_dimensions,
     serialize_operational_fact,
+    serialize_operational_fact_trace,
     serialize_operational_summary_row,
+    serialize_operational_trend,
     serialize_report,
     serialize_report_summary,
     serialize_row,
@@ -104,19 +116,42 @@ async def list_operational_facts(
     uploaded_file_id: UUID | None = None,
     buyer: str | None = None,
     unit: str | None = None,
+    buyer_id: UUID | None = None,
+    unit_id: UUID | None = None,
     metric: str | None = None,
+    section: str | None = None,
+    report_type_id: UUID | None = None,
     report_date: date | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    value_min: Decimal | None = None,
+    value_max: Decimal | None = None,
+    value_type: str | None = None,
+    search: str | None = None,
 ) -> OperationalFactListResponse:
+    filters = OperationalFactFilters(
+        uploaded_file_id=uploaded_file_id,
+        buyer=buyer,
+        unit=unit,
+        buyer_id=buyer_id,
+        unit_id=unit_id,
+        metric_key=metric,
+        operational_section=section,
+        report_type_id=report_type_id,
+        report_date=report_date,
+        date_from=date_from,
+        date_to=date_to,
+        value_min=value_min,
+        value_max=value_max,
+        value_type=value_type,
+        search=search,
+    )
     facts, total = await repository.list_operational_facts(
         session,
         user=user,
         page=page,
         page_size=page_size,
-        uploaded_file_id=uploaded_file_id,
-        buyer=buyer,
-        unit=unit,
-        metric_key=metric,
-        report_date=report_date,
+        filters=filters,
     )
     return OperationalFactListResponse(
         facts=[serialize_operational_fact(fact) for fact in facts],
@@ -209,21 +244,179 @@ async def get_operational_summary(
     buyer: str | None = None,
     unit: str | None = None,
     metric: str | None = None,
+    section: str | None = None,
+    report_type_id: UUID | None = None,
     report_date: date | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> OperationalSummaryResponse:
-    rows = await repository.summarize_operational_facts(
-        session,
-        user=user,
+    filters = OperationalFactFilters(
         uploaded_file_id=uploaded_file_id,
         buyer=buyer,
         unit=unit,
         metric_key=metric,
+        operational_section=section,
+        report_type_id=report_type_id,
         report_date=report_date,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    rows = await repository.summarize_operational_facts(
+        session,
+        user=user,
+        filters=filters,
     )
     return OperationalSummaryResponse(
         rows=[serialize_operational_summary_row(row) for row in rows],
         total=len(rows),
     )
+
+
+@router.get("/operations/aggregate", response_model=OperationalAggregationResponse)
+async def get_operational_aggregation(
+    session: SessionDep,
+    user: ReportReaderDep,
+    group_by: Annotated[list[str] | None, Query()] = None,
+    uploaded_file_id: UUID | None = None,
+    buyer: str | None = None,
+    unit: str | None = None,
+    buyer_id: UUID | None = None,
+    unit_id: UUID | None = None,
+    metric: str | None = None,
+    section: str | None = None,
+    report_type_id: UUID | None = None,
+    report_date: date | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    value_min: Decimal | None = None,
+    value_max: Decimal | None = None,
+) -> OperationalAggregationResponse:
+    """Grouped operational totals.
+
+    ``group_by`` accepts repeated values from: buyer, unit, metric, section,
+    report_date, report_type, workbook. Without it, only the grand total is
+    returned. Covers totals, grouped totals, buyer totals, unit totals, and
+    section totals from a single endpoint.
+    """
+    filters = OperationalFactFilters(
+        uploaded_file_id=uploaded_file_id,
+        buyer=buyer,
+        unit=unit,
+        buyer_id=buyer_id,
+        unit_id=unit_id,
+        metric_key=metric,
+        operational_section=section,
+        report_type_id=report_type_id,
+        report_date=report_date,
+        date_from=date_from,
+        date_to=date_to,
+        value_min=value_min,
+        value_max=value_max,
+    )
+    rows, overall = await repository.aggregate_operational_facts(
+        session,
+        user=user,
+        filters=filters,
+        group_by=group_by,
+    )
+    resolved_group_by = repository.resolve_aggregation_dimensions(group_by)
+    return serialize_operational_aggregation(
+        group_by=resolved_group_by,
+        rows=rows,
+        overall=overall,
+    )
+
+
+@router.get("/operations/trend", response_model=OperationalTrendResponse)
+async def get_operational_trend(
+    session: SessionDep,
+    user: ReportReaderDep,
+    metric: Annotated[str, Query(min_length=1)],
+    buyer: str | None = None,
+    unit: str | None = None,
+    section: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: Annotated[int, Query(ge=1, le=365)] = 180,
+) -> OperationalTrendResponse:
+    """History/trend retrieval for buyer+metric, unit+metric, buyer+unit+metric."""
+    rows = await repository.get_operational_trend(
+        session,
+        user=user,
+        metric_key=metric,
+        buyer=buyer,
+        unit=unit,
+        operational_section=section,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+    return serialize_operational_trend(
+        metric_key=metric,
+        buyer=buyer,
+        unit=unit,
+        operational_section=section,
+        rows=rows,
+    )
+
+
+@router.get("/operations/comparison", response_model=OperationalComparisonResponse)
+async def get_operational_comparison(
+    session: SessionDep,
+    user: ReportReaderDep,
+    metric: Annotated[str, Query(min_length=1)],
+    current_date: date,
+    previous_date: date | None = None,
+    buyer: str | None = None,
+    unit: str | None = None,
+    section: str | None = None,
+) -> OperationalComparisonResponse:
+    """Previous-day / nearest-previous-record comparison with delta indicators.
+
+    When ``previous_date`` is omitted, the nearest previous operational date
+    is resolved automatically.
+    """
+    comparison = await repository.get_operational_comparison(
+        session,
+        user=user,
+        metric_key=metric,
+        current_date=current_date,
+        previous_date=previous_date,
+        buyer=buyer,
+        unit=unit,
+        operational_section=section,
+    )
+    return serialize_operational_comparison(comparison)
+
+
+@router.get("/operations/dimensions", response_model=OperationalDimensionsResponse)
+async def get_operational_dimensions(
+    session: SessionDep,
+    user: ReportReaderDep,
+) -> OperationalDimensionsResponse:
+    """Distinct buyer/unit/metric/section/date values for filter dropdowns."""
+    data = await repository.list_operational_dimensions(session, user=user)
+    return serialize_operational_dimensions(data)
+
+
+@router.get("/operations/facts/{fact_id}/trace", response_model=OperationalFactTraceResponse)
+async def trace_operational_fact(
+    fact_id: UUID,
+    session: SessionDep,
+    user: ReportReaderDep,
+) -> OperationalFactTraceResponse:
+    """Trace a semantic fact back to workbook, sheet, cell, and section."""
+    fact = await repository.get_accessible_operational_fact(
+        session,
+        fact_id=fact_id,
+        user=user,
+    )
+    if fact is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Operational fact not found.",
+        )
+    return serialize_operational_fact_trace(fact)
 
 
 @router.get(

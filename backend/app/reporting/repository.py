@@ -1,4 +1,6 @@
+from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -220,46 +222,121 @@ async def replace_operational_facts(
     await session.flush()
 
 
+@dataclass(slots=True)
+class OperationalFactFilters:
+    """Structured filter set for the operational fact query engine (MD07-2).
+
+    Centralizing the filter shape keeps the list/summary/aggregation/history
+    queries consistent and lets every endpoint share the same exact, range,
+    and multi-filter combination semantics without duplicating SQL.
+    """
+
+    uploaded_file_id: UUID | None = None
+    buyer: str | None = None
+    unit: str | None = None
+    buyer_id: UUID | None = None
+    unit_id: UUID | None = None
+    metric_key: str | None = None
+    operational_section: str | None = None
+    report_type_id: UUID | None = None
+    report_date: date | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    value_min: Decimal | None = None
+    value_max: Decimal | None = None
+    value_type: str | None = None
+    search: str | None = None
+
+
+def _operational_fact_filters(
+    user: AuthUser,
+    filters: OperationalFactFilters,
+) -> list[ColumnElement[bool]]:
+    clauses: list[ColumnElement[bool]] = [
+        OperationalFact.deleted_at.is_(None),
+        UploadedFile.deleted_at.is_(None),
+        _uploaded_file_access_filter(user),
+    ]
+    if filters.uploaded_file_id is not None:
+        clauses.append(OperationalFact.uploaded_file_id == filters.uploaded_file_id)
+    if filters.buyer:
+        clauses.append(func.lower(OperationalFact.buyer) == filters.buyer.strip().lower())
+    if filters.unit:
+        clauses.append(func.lower(OperationalFact.unit) == filters.unit.strip().lower())
+    if filters.buyer_id is not None:
+        clauses.append(OperationalFact.buyer_id == filters.buyer_id)
+    if filters.unit_id is not None:
+        clauses.append(OperationalFact.unit_id == filters.unit_id)
+    if filters.metric_key:
+        clauses.append(func.lower(OperationalFact.metric_key) == filters.metric_key.strip().lower())
+    if filters.operational_section:
+        clauses.append(
+            func.lower(OperationalFact.operational_section)
+            == filters.operational_section.strip().lower()
+        )
+    if filters.report_type_id is not None:
+        clauses.append(UploadedFile.report_type_id == filters.report_type_id)
+    if filters.report_date is not None:
+        clauses.append(OperationalFact.report_date == filters.report_date)
+    if filters.date_from is not None:
+        clauses.append(OperationalFact.report_date >= filters.date_from)
+    if filters.date_to is not None:
+        clauses.append(OperationalFact.report_date <= filters.date_to)
+    if filters.value_min is not None:
+        clauses.append(OperationalFact.value_numeric >= filters.value_min)
+    if filters.value_max is not None:
+        clauses.append(OperationalFact.value_numeric <= filters.value_max)
+    if filters.value_type:
+        clauses.append(OperationalFact.value_type == filters.value_type.strip().lower())
+    if filters.search:
+        needle = f"%{filters.search.strip().lower()}%"
+        clauses.append(
+            or_(
+                func.lower(OperationalFact.metric_label).like(needle),
+                func.lower(OperationalFact.metric_key).like(needle),
+                func.lower(func.coalesce(OperationalFact.buyer, "")).like(needle),
+                func.lower(func.coalesce(OperationalFact.unit, "")).like(needle),
+                func.lower(OperationalFact.operational_section_label).like(needle),
+                func.lower(func.coalesce(OperationalFact.operational_row_label, "")).like(needle),
+            )
+        )
+    return clauses
+
+
 async def list_operational_facts(
     session: AsyncSession,
     *,
     user: AuthUser,
     page: int,
     page_size: int,
+    filters: OperationalFactFilters | None = None,
     uploaded_file_id: UUID | None = None,
     buyer: str | None = None,
     unit: str | None = None,
     metric_key: str | None = None,
     report_date: date | None = None,
 ) -> tuple[list[OperationalFact], int]:
-    filters: list[ColumnElement[bool]] = [
-        OperationalFact.deleted_at.is_(None),
-        UploadedFile.deleted_at.is_(None),
-        _uploaded_file_access_filter(user),
-    ]
-    if uploaded_file_id is not None:
-        filters.append(OperationalFact.uploaded_file_id == uploaded_file_id)
-    if buyer:
-        filters.append(func.lower(OperationalFact.buyer) == buyer.strip().lower())
-    if unit:
-        filters.append(func.lower(OperationalFact.unit) == unit.strip().lower())
-    if metric_key:
-        filters.append(func.lower(OperationalFact.metric_key) == metric_key.strip().lower())
-    if report_date is not None:
-        filters.append(OperationalFact.report_date == report_date)
+    resolved = filters or OperationalFactFilters(
+        uploaded_file_id=uploaded_file_id,
+        buyer=buyer,
+        unit=unit,
+        metric_key=metric_key,
+        report_date=report_date,
+    )
+    clauses = _operational_fact_filters(user, resolved)
 
     total_result = await session.execute(
         select(func.count())
         .select_from(OperationalFact)
         .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
-        .where(*filters)
+        .where(*clauses)
     )
     total = total_result.scalar_one()
 
     result = await session.execute(
         select(OperationalFact)
         .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
-        .where(*filters)
+        .where(*clauses)
         .order_by(
             OperationalFact.report_date.desc().nullslast(),
             OperationalFact.source_sheet_index.asc().nullslast(),
@@ -276,27 +353,21 @@ async def summarize_operational_facts(
     session: AsyncSession,
     *,
     user: AuthUser,
+    filters: OperationalFactFilters | None = None,
     uploaded_file_id: UUID | None = None,
     buyer: str | None = None,
     unit: str | None = None,
     metric_key: str | None = None,
     report_date: date | None = None,
-) -> list[dict]:
-    filters: list[ColumnElement[bool]] = [
-        OperationalFact.deleted_at.is_(None),
-        UploadedFile.deleted_at.is_(None),
-        _uploaded_file_access_filter(user),
-    ]
-    if uploaded_file_id is not None:
-        filters.append(OperationalFact.uploaded_file_id == uploaded_file_id)
-    if buyer:
-        filters.append(func.lower(OperationalFact.buyer) == buyer.strip().lower())
-    if unit:
-        filters.append(func.lower(OperationalFact.unit) == unit.strip().lower())
-    if metric_key:
-        filters.append(func.lower(OperationalFact.metric_key) == metric_key.strip().lower())
-    if report_date is not None:
-        filters.append(OperationalFact.report_date == report_date)
+) -> list[dict[str, Any]]:
+    resolved = filters or OperationalFactFilters(
+        uploaded_file_id=uploaded_file_id,
+        buyer=buyer,
+        unit=unit,
+        metric_key=metric_key,
+        report_date=report_date,
+    )
+    clauses = _operational_fact_filters(user, resolved)
 
     stmt = (
         select(
@@ -314,7 +385,7 @@ async def summarize_operational_facts(
         )
         .select_from(OperationalFact)
         .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
-        .where(*filters)
+        .where(*clauses)
         .group_by(
             OperationalFact.metric_key,
             OperationalFact.metric_label,
@@ -332,6 +403,324 @@ async def summarize_operational_facts(
     )
     result = await session.execute(stmt)
     return [dict(row._mapping) for row in result.all()]
+
+
+# ---------------------------------------------------------------------------
+# Operational aggregation layer (MD07-2)
+# ---------------------------------------------------------------------------
+
+# Whitelisted grouping dimensions for the aggregation endpoint. Keys map to the
+# column the caller wants to group by; only these are accepted so the
+# ``group_by`` clause can never be driven by untrusted input.
+_AGGREGATION_DIMENSIONS: dict[str, Any] = {
+    "buyer": OperationalFact.buyer,
+    "unit": OperationalFact.unit,
+    "metric": OperationalFact.metric_key,
+    "section": OperationalFact.operational_section,
+    "report_date": OperationalFact.report_date,
+    "report_type": UploadedFile.report_type_id,
+    "workbook": OperationalFact.uploaded_file_id,
+}
+
+
+def resolve_aggregation_dimensions(group_by: list[str] | None) -> list[str]:
+    """Filter caller-supplied grouping keys down to the supported set."""
+    return [key for key in (group_by or []) if key in _AGGREGATION_DIMENSIONS]
+
+
+async def aggregate_operational_facts(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+    filters: OperationalFactFilters,
+    group_by: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return grouped totals plus an overall total row.
+
+    ``group_by`` accepts any subset of :data:`_AGGREGATION_DIMENSIONS` keys.
+    Unknown keys are ignored. When no valid dimension is supplied only the
+    grand total is returned. A single aggregate query backs both buyer/unit/
+    section totals and arbitrary multi-dimension grouping to avoid N+1.
+    """
+    clauses = _operational_fact_filters(user, filters)
+    requested = [key for key in (group_by or []) if key in _AGGREGATION_DIMENSIONS]
+
+    numeric_total = func.coalesce(func.sum(OperationalFact.value_numeric), 0).label(
+        "numeric_total"
+    )
+    fact_count = func.count(OperationalFact.id).label("fact_count")
+    formula_count = (
+        func.count(OperationalFact.id)
+        .filter(OperationalFact.is_formula.is_(True))
+        .label("formula_count")
+    )
+    numeric_count = (
+        func.count(OperationalFact.value_numeric).label("numeric_count")
+    )
+
+    # Grand total (always computed in one round-trip).
+    overall_result = await session.execute(
+        select(numeric_total, fact_count, formula_count, numeric_count)
+        .select_from(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .where(*clauses)
+    )
+    overall = dict(overall_result.one()._mapping)
+
+    if not requested:
+        return [], overall
+
+    group_columns = [_AGGREGATION_DIMENSIONS[key].label(key) for key in requested]
+    stmt = (
+        select(*group_columns, numeric_total, fact_count, formula_count, numeric_count)
+        .select_from(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .where(*clauses)
+        .group_by(*group_columns)
+        .order_by(numeric_total.desc())
+    )
+    result = await session.execute(stmt)
+    rows = [dict(row._mapping) for row in result.all()]
+    return rows, overall
+
+
+# ---------------------------------------------------------------------------
+# Historical operational querying (MD07-2)
+# ---------------------------------------------------------------------------
+
+
+async def get_operational_trend(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+    metric_key: str,
+    buyer: str | None = None,
+    unit: str | None = None,
+    operational_section: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = 180,
+) -> list[dict[str, Any]]:
+    """Return a per-date history series for a metric (optionally scoped).
+
+    Supports trend retrieval for buyer+metric, unit+metric, and
+    buyer+unit+metric. Results are grouped by ``report_date`` so the frontend
+    can render a tabular trend preview without an N+1 fetch per day.
+    """
+    filters = OperationalFactFilters(
+        metric_key=metric_key,
+        buyer=buyer,
+        unit=unit,
+        operational_section=operational_section,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    clauses = _operational_fact_filters(user, filters)
+    clauses.append(OperationalFact.report_date.is_not(None))
+
+    stmt = (
+        select(
+            OperationalFact.report_date.label("report_date"),
+            func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("numeric_total"),
+            func.count(OperationalFact.id).label("fact_count"),
+            func.count(OperationalFact.value_numeric).label("numeric_count"),
+        )
+        .select_from(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .where(*clauses)
+        .group_by(OperationalFact.report_date)
+        .order_by(OperationalFact.report_date.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    rows = [dict(row._mapping) for row in result.all()]
+    rows.reverse()  # ascending chronological order for trend rendering
+    return rows
+
+
+async def get_nearest_previous_date(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+    reference_date: date,
+    metric_key: str | None = None,
+    buyer: str | None = None,
+    unit: str | None = None,
+    operational_section: str | None = None,
+) -> date | None:
+    """Return the closest operational_date strictly before ``reference_date``.
+
+    Used for both previous-day lookup and nearest-previous-record comparison.
+    A single ``max(report_date)`` query keeps this cheap.
+    """
+    filters = OperationalFactFilters(
+        metric_key=metric_key,
+        buyer=buyer,
+        unit=unit,
+        operational_section=operational_section,
+    )
+    clauses = _operational_fact_filters(user, filters)
+    clauses.append(OperationalFact.report_date.is_not(None))
+    clauses.append(OperationalFact.report_date < reference_date)
+
+    result = await session.execute(
+        select(func.max(OperationalFact.report_date))
+        .select_from(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .where(*clauses)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_operational_comparison(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+    metric_key: str,
+    current_date: date,
+    previous_date: date | None = None,
+    buyer: str | None = None,
+    unit: str | None = None,
+    operational_section: str | None = None,
+) -> dict[str, Any]:
+    """Compare current vs previous operational totals for a metric.
+
+    When ``previous_date`` is omitted the nearest previous record date is
+    resolved automatically (previous-day / nearest-previous-record lookup).
+    Returns current/previous totals plus the resolved previous date so the UI
+    can render delta indicators.
+    """
+    if previous_date is None:
+        previous_date = await get_nearest_previous_date(
+            session,
+            user=user,
+            reference_date=current_date,
+            metric_key=metric_key,
+            buyer=buyer,
+            unit=unit,
+            operational_section=operational_section,
+        )
+
+    async def _total_for(target: date | None) -> dict[str, Any]:
+        if target is None:
+            return {"numeric_total": None, "fact_count": 0, "numeric_count": 0}
+        filters = OperationalFactFilters(
+            metric_key=metric_key,
+            buyer=buyer,
+            unit=unit,
+            operational_section=operational_section,
+            report_date=target,
+        )
+        clauses = _operational_fact_filters(user, filters)
+        result = await session.execute(
+            select(
+                func.sum(OperationalFact.value_numeric).label("numeric_total"),
+                func.count(OperationalFact.id).label("fact_count"),
+                func.count(OperationalFact.value_numeric).label("numeric_count"),
+            )
+            .select_from(OperationalFact)
+            .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+            .where(*clauses)
+        )
+        return dict(result.one()._mapping)
+
+    current = await _total_for(current_date)
+    previous = await _total_for(previous_date)
+    return {
+        "metric_key": metric_key,
+        "buyer": buyer,
+        "unit": unit,
+        "operational_section": operational_section,
+        "current_date": current_date,
+        "previous_date": previous_date,
+        "current": current,
+        "previous": previous,
+    }
+
+
+async def get_accessible_operational_fact(
+    session: AsyncSession,
+    *,
+    fact_id: UUID,
+    user: AuthUser,
+) -> OperationalFact | None:
+    """Fetch a single operational fact (with its uploaded file) for traceback."""
+    result = await session.execute(
+        select(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .where(
+            OperationalFact.id == fact_id,
+            OperationalFact.deleted_at.is_(None),
+            UploadedFile.deleted_at.is_(None),
+            _uploaded_file_access_filter(user),
+        )
+        .options(selectinload(OperationalFact.uploaded_file))
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_operational_dimensions(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return distinct filter options that actually appear in operational facts.
+
+    Powers the operational query panel dropdowns (buyer / unit / metric /
+    section) without forcing the UI to scan the full fact list. Each query is
+    a single grouped round-trip, so this stays N+1 free.
+    """
+    base_filters = [
+        OperationalFact.deleted_at.is_(None),
+        UploadedFile.deleted_at.is_(None),
+        _uploaded_file_access_filter(user),
+    ]
+
+    async def _distinct(value_col: Any, label_col: Any) -> list[dict[str, Any]]:
+        stmt = (
+            select(value_col.label("value"), func.max(label_col).label("label"))
+            .select_from(OperationalFact)
+            .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+            .where(*base_filters, value_col.is_not(None))
+            .group_by(value_col)
+            .order_by(value_col)
+        )
+        result = await session.execute(stmt)
+        return [
+            {"value": row.value, "label": row.label or row.value}
+            for row in result.all()
+            if row.value is not None and str(row.value).strip()
+        ]
+
+    buyers = await _distinct(OperationalFact.buyer, OperationalFact.buyer)
+    units = await _distinct(OperationalFact.unit, OperationalFact.unit)
+    metrics = await _distinct(OperationalFact.metric_key, OperationalFact.metric_label)
+    sections = await _distinct(
+        OperationalFact.operational_section,
+        OperationalFact.operational_section_label,
+    )
+
+    # Distinct report dates (for date pickers / range hints).
+    date_result = await session.execute(
+        select(OperationalFact.report_date)
+        .select_from(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .where(*base_filters, OperationalFact.report_date.is_not(None))
+        .group_by(OperationalFact.report_date)
+        .order_by(OperationalFact.report_date.desc())
+    )
+    dates = [
+        {"value": row[0].isoformat(), "label": row[0].isoformat()}
+        for row in date_result.all()
+    ]
+
+    return {
+        "buyers": buyers,
+        "units": units,
+        "metrics": metrics,
+        "sections": sections,
+        "dates": dates,
+    }
 
 
 async def get_operational_facts_for_cells(
