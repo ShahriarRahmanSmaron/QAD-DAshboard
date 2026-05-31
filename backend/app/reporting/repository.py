@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -208,6 +208,23 @@ async def get_accessible_uploaded_file(
     return result.scalar_one_or_none()
 
 
+async def list_accessible_uploaded_files(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+) -> list[UploadedFile]:
+    """Return all processed workbooks the user can access (for bulk rebuild)."""
+    result = await session.execute(
+        select(UploadedFile)
+        .where(
+            UploadedFile.deleted_at.is_(None),
+            _uploaded_file_access_filter(user),
+        )
+        .order_by(UploadedFile.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
 async def replace_operational_facts(
     session: AsyncSession,
     *,
@@ -229,6 +246,10 @@ class OperationalFactFilters:
     Centralizing the filter shape keeps the list/summary/aggregation/history
     queries consistent and lets every endpoint share the same exact, range,
     and multi-filter combination semantics without duplicating SQL.
+
+    MD07-2B adds ``row_classification`` (rollup taxonomy) and ``include_inactive``
+    (default ``False``) so every operational query reads only active,
+    correctly-classified facts unless a caller explicitly opts in.
     """
 
     uploaded_file_id: UUID | None = None
@@ -245,6 +266,8 @@ class OperationalFactFilters:
     value_min: Decimal | None = None
     value_max: Decimal | None = None
     value_type: str | None = None
+    row_classification: str | None = None
+    include_inactive: bool = False
     search: str | None = None
 
 
@@ -257,6 +280,10 @@ def _operational_fact_filters(
         UploadedFile.deleted_at.is_(None),
         _uploaded_file_access_filter(user),
     ]
+    # MD07-2B: queries operate on active facts only unless explicitly told to
+    # include the soft-cleaned (legacy composite / ambiguous) ones.
+    if not filters.include_inactive:
+        clauses.append(OperationalFact.is_active.is_(True))
     if filters.uploaded_file_id is not None:
         clauses.append(OperationalFact.uploaded_file_id == filters.uploaded_file_id)
     if filters.buyer:
@@ -288,6 +315,10 @@ def _operational_fact_filters(
         clauses.append(OperationalFact.value_numeric <= filters.value_max)
     if filters.value_type:
         clauses.append(OperationalFact.value_type == filters.value_type.strip().lower())
+    if filters.row_classification:
+        clauses.append(
+            OperationalFact.row_classification == filters.row_classification.strip().lower()
+        )
     if filters.search:
         needle = f"%{filters.search.strip().lower()}%"
         clauses.append(
@@ -367,7 +398,7 @@ async def summarize_operational_facts(
         metric_key=metric_key,
         report_date=report_date,
     )
-    clauses = _operational_fact_filters(user, resolved)
+    clauses = _operational_fact_filters(user, _with_default_grain(resolved))
 
     stmt = (
         select(
@@ -428,6 +459,20 @@ def resolve_aggregation_dimensions(group_by: list[str] | None) -> list[str]:
     return [key for key in (group_by or []) if key in _AGGREGATION_DIMENSIONS]
 
 
+# MD07-2B: summation endpoints (summary / aggregate / trend / comparison) sum a
+# single leaf grain so totals match the workbook. When the caller does not pin
+# a classification, default to ``detail`` — the leaf level that adds up to the
+# workbook total — so detail and its enclosing subtotal are never both counted.
+_DETAIL_CLASSIFICATION = "detail"
+
+
+def _with_default_grain(filters: OperationalFactFilters) -> OperationalFactFilters:
+    """Return ``filters`` pinned to the detail grain when none was specified."""
+    if filters.row_classification:
+        return filters
+    return replace(filters, row_classification=_DETAIL_CLASSIFICATION)
+
+
 async def aggregate_operational_facts(
     session: AsyncSession,
     *,
@@ -442,7 +487,7 @@ async def aggregate_operational_facts(
     grand total is returned. A single aggregate query backs both buyer/unit/
     section totals and arbitrary multi-dimension grouping to avoid N+1.
     """
-    clauses = _operational_fact_filters(user, filters)
+    clauses = _operational_fact_filters(user, _with_default_grain(filters))
     requested = [key for key in (group_by or []) if key in _AGGREGATION_DIMENSIONS]
 
     numeric_total = func.coalesce(func.sum(OperationalFact.value_numeric), 0).label(
@@ -499,6 +544,7 @@ async def get_operational_trend(
     operational_section: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    classification: str | None = None,
     limit: int = 180,
 ) -> list[dict[str, Any]]:
     """Return a per-date history series for a metric (optionally scoped).
@@ -514,8 +560,9 @@ async def get_operational_trend(
         operational_section=operational_section,
         date_from=date_from,
         date_to=date_to,
+        row_classification=classification,
     )
-    clauses = _operational_fact_filters(user, filters)
+    clauses = _operational_fact_filters(user, _with_default_grain(filters))
     clauses.append(OperationalFact.report_date.is_not(None))
 
     stmt = (
@@ -582,6 +629,7 @@ async def get_operational_comparison(
     buyer: str | None = None,
     unit: str | None = None,
     operational_section: str | None = None,
+    classification: str | None = None,
 ) -> dict[str, Any]:
     """Compare current vs previous operational totals for a metric.
 
@@ -610,8 +658,9 @@ async def get_operational_comparison(
             unit=unit,
             operational_section=operational_section,
             report_date=target,
+            row_classification=classification,
         )
-        clauses = _operational_fact_filters(user, filters)
+        clauses = _operational_fact_filters(user, _with_default_grain(filters))
         result = await session.execute(
             select(
                 func.sum(OperationalFact.value_numeric).label("numeric_total"),
@@ -669,9 +718,13 @@ async def list_operational_dimensions(
     Powers the operational query panel dropdowns (buyer / unit / metric /
     section) without forcing the UI to scan the full fact list. Each query is
     a single grouped round-trip, so this stays N+1 free.
+
+    MD07-2B: dropdowns surface only *active* facts, so legacy composite /
+    ambiguous buyers (soft-cleaned via ``is_active = false``) never appear.
     """
     base_filters = [
         OperationalFact.deleted_at.is_(None),
+        OperationalFact.is_active.is_(True),
         UploadedFile.deleted_at.is_(None),
         _uploaded_file_access_filter(user),
     ]

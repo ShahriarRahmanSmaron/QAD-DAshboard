@@ -19,6 +19,7 @@ import type {
   ReportWorkflowAction,
   ReportTypeListResponse,
   UnitListResponse,
+  WorkbookRebuildResponse,
   WorkbookSemanticBreakdownResponse,
   WorkbookSemanticDiagnosticsResponse,
   WorkbookUploadResponse,
@@ -138,6 +139,8 @@ export type OperationalQueryParams = {
   value_min?: string | number;
   value_max?: string | number;
   value_type?: string;
+  classification?: string;
+  include_inactive?: boolean;
   search?: string;
   page?: number;
   page_size?: number;
@@ -266,6 +269,19 @@ export function getWorkbookSemantics(uploadedFileId: string) {
 export function getWorkbookDiagnostics(uploadedFileId: string) {
   return request<WorkbookSemanticDiagnosticsResponse>(
     `/api/reports/workbooks/${uploadedFileId}/diagnostics`,
+  );
+}
+
+export function rebuildOperationalFacts() {
+  return request<WorkbookRebuildResponse>("/api/reports/operations/rebuild", {
+    method: "POST",
+  });
+}
+
+export function rebuildWorkbookOperationalFacts(uploadedFileId: string) {
+  return request<WorkbookRebuildResponse>(
+    `/api/reports/workbooks/${uploadedFileId}/rebuild`,
+    { method: "POST" },
   );
 }
 

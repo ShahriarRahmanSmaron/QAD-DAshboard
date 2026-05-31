@@ -284,6 +284,9 @@ class OperationalFactResponse(BaseModel):
     is_formula: bool
     formula: str | None
     calculated_state: str
+    row_classification: str
+    is_active: bool
+    inactive_reason: str | None
     source_sheet_name: str
     source_sheet_index: int | None
     source_cell_address: str
@@ -492,6 +495,27 @@ class WorkbookSemanticDiagnosticsBundle(BaseModel):
     diagnostics: SemanticDiagnosticsResponse
     confidence_counts: dict[str, int] = Field(default_factory=dict)
     semantic_mapping: JsonObject = Field(default_factory=dict)
+
+
+class WorkbookRebuildResult(BaseModel):
+    """Per-workbook outcome of an MD07-2B operational-fact rebuild."""
+
+    uploaded_file_id: UUID
+    original_filename: str | None = None
+    status: str
+    fact_count: int = 0
+    active_fact_count: int = 0
+    inactive_fact_count: int = 0
+    classification_counts: dict[str, int] = Field(default_factory=dict)
+    error: str | None = None
+
+
+class WorkbookRebuildResponse(BaseModel):
+    """Summary of a rebuild run across one or more workbooks."""
+
+    rebuilt: int = 0
+    failed: int = 0
+    results: list[WorkbookRebuildResult] = Field(default_factory=list)
 
 
 class WorkbookSemanticBreakdownResponse(BaseModel):

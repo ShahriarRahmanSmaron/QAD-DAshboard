@@ -11,7 +11,7 @@ reusable across future workbook formats.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -23,11 +23,20 @@ from app.auth.schemas import AuthUser
 from app.reporting import repository
 from app.reporting.models import OperationalFact, UploadedFile
 from app.reporting.workbook_diagnostics import build_semantic_diagnostics
+from app.reporting.workbook_formula_eval import build_sheet_formula_evaluator
 from app.reporting.workbook_normalization import (
+    CLASS_DETAIL,
+    CLASS_GRAND_TOTAL,
+    CLASS_PREVIOUS_DAY,
+    CLASS_SUBTOTAL,
+    CLASS_SUMMARY,
+    CONFIDENCE_AMBIGUOUS,
     CONFIDENCE_EXPLICIT,
     CONFIDENCE_INFERRED,
     CONFIDENCE_UNMAPPED,
     MappingConfidence,
+    classify_row,
+    is_composite_label,
     normalize_report_date,
     slugify,
 )
@@ -64,6 +73,9 @@ class SemanticFact:
     is_formula: bool
     formula: str | None
     calculated_state: str
+    row_classification: str
+    is_active: bool
+    inactive_reason: str | None
     source_sheet_name: str
     source_sheet_index: int | None
     source_cell_address: str
@@ -259,6 +271,9 @@ def _fact_json(fact: SemanticFact) -> JsonObject:
         "is_formula": fact.is_formula,
         "formula": fact.formula,
         "calculated_state": fact.calculated_state,
+        "row_classification": fact.row_classification,
+        "is_active": fact.is_active,
+        "inactive_reason": fact.inactive_reason,
         "source_sheet_name": fact.source_sheet_name,
         "source_sheet_index": fact.source_sheet_index,
         "source_cell_address": fact.source_cell_address,
@@ -393,6 +408,29 @@ def _region_text(region: JsonObject | None, key: str) -> str | None:
     return str(value) if value else None
 
 
+def _row_caption(cells: dict[CellKey, JsonObject], row_number: int, max_column: int) -> str | None:
+    """Return the leftmost text caption on a row (e.g. ``GRAND TOTAL``).
+
+    Operational workbooks label aggregate rows with a caption in a leading
+    column (``B62 = "GRAND TOTAL"``, ``B65 = "PREVIOUS DAY"``). This reads that
+    caption so the classification layer can tell a Grand Total row apart from a
+    Previous Day row — independent of which value column the fact came from. No
+    business vocabulary is assumed; the caption text itself drives the rollup
+    taxonomy.
+    """
+    for column in range(1, max_column + 1):
+        cell = cells.get((row_number, column))
+        if not cell:
+            continue
+        raw = cell.get("value")
+        if cell.get("formula"):
+            continue
+        text = _cell_text(raw)
+        if text and not _parse_decimal(text) and _parse_date_text(text) is None:
+            return text
+    return None
+
+
 def _extract_sheet_semantics(
     sheet: JsonObject,
     *,
@@ -405,8 +443,10 @@ def _extract_sheet_semantics(
     dimension = str(sheet.get("dimension") or "")
     cells = _sheet_cell_map(sheet)
     regions = _region_index(sheet)
+    max_column = max((col for _row, col in cells), default=0)
 
     ownership: SheetOwnership = build_sheet_ownership(sheet)
+    formula_evaluator = build_sheet_formula_evaluator(cells)
     sheet_date, sheet_date_confidence = _extract_report_date(cells, filename)
     if sheet_date is None and workbook_report_date is not None:
         sheet_date = workbook_report_date
@@ -425,6 +465,23 @@ def _extract_sheet_semantics(
         )
         if not _fact_should_be_recorded(value_type, formula):
             continue
+
+        # Formula value persistence (MD07-2B Issue A): a formula cell carries no
+        # cached value in the parsed grid, so evaluate it from the sheet's own
+        # cells. The evaluated number becomes the fact's numeric value while the
+        # formula text is preserved separately. Aggregation always uses the
+        # numeric value, never the formula string.
+        if formula is not None:
+            evaluated = formula_evaluator.evaluate(row_number, column_number)
+            if evaluated is None and value_numeric is not None:
+                # Fall back to a cached numeric value when present.
+                evaluated = value_numeric
+            if evaluated is not None:
+                value_type = "number"
+                value_numeric = evaluated
+                value_text = None
+                value_date = None
+                value_boolean = None
 
         own: CellOwnership | None = ownership.ownership_for(row_number, column_number)
         if own is None:
@@ -482,11 +539,59 @@ def _extract_sheet_semantics(
         row_label = own.buyer or own.unit
         column_label = own.metric_label
 
+        # Row classification (MD07-2B): determine whether this fact is a detail
+        # leaf, a unit subtotal, the workbook Grand Total, the Previous Day
+        # comparison row, or a generic summary. The row's own caption is
+        # authoritative; this keeps Grand Total and Previous Day as separate
+        # semantic concepts that aggregation can never mix.
+        row_caption = _row_caption(cells, row_number, max_column)
+        row_classification = classify_row(
+            row_label=row_caption,
+            is_rollup=own.is_rollup,
+            is_formula=formula is not None,
+        )
+
+        fact_unit = own.unit
+        fact_buyer = own.buyer
+        if row_classification in {CLASS_GRAND_TOTAL, CLASS_PREVIOUS_DAY}:
+            # Workbook-level aggregate: the value belongs to the whole workbook,
+            # not the trailing data block. Clear any unit/buyer leaked via
+            # inheritance so a Grand Total / Previous Day value can never
+            # masquerade as a unit's stock.
+            if own.unit_source in {"merged_inheritance", "grouping_block"}:
+                fact_unit = None
+            fact_buyer = None
+        elif row_classification in {CLASS_SUMMARY, CLASS_SUBTOTAL}:
+            # A formula/rollup that sits inside a unit block is that unit's
+            # subtotal (e.g. the per-unit SUM row or the unit T/Stock cell) and
+            # must keep its unit. A rollup with no governing unit is a generic
+            # summary and carries no unit.
+            if fact_unit:
+                row_classification = CLASS_SUBTOTAL
+            else:
+                row_classification = CLASS_SUMMARY
+
+        # Legacy fact sanitation (MD07-2B): mark composite / low-confidence
+        # buyer ownership inactive so it is excluded from queries and dropdowns
+        # without deleting the record. Detail facts require a trustworthy
+        # buyer or unit; aggregates are always retained as active.
+        is_active = True
+        inactive_reason: str | None = None
+        if fact_buyer is not None and is_composite_label(fact_buyer):
+            is_active = False
+            inactive_reason = "composite_buyer"
+        elif (
+            row_classification == CLASS_DETAIL
+            and overall_confidence == CONFIDENCE_AMBIGUOUS
+        ):
+            is_active = False
+            inactive_reason = "ambiguous_ownership"
+
         facts.append(
             SemanticFact(
                 source_key=f"{sheet_name}!{address}:{own.metric_key}:{own.section_key}",
-                buyer=own.buyer,
-                unit=own.unit,
+                buyer=fact_buyer,
+                unit=fact_unit,
                 report_date=report_date,
                 metric_key=own.metric_key,
                 metric_label=own.metric_label,
@@ -504,6 +609,9 @@ def _extract_sheet_semantics(
                 is_formula=formula is not None,
                 formula=formula,
                 calculated_state=calculated_state,
+                row_classification=row_classification,
+                is_active=is_active,
+                inactive_reason=inactive_reason,
                 source_sheet_name=sheet_name,
                 source_sheet_index=sheet_index,
                 source_cell_address=address,
@@ -524,6 +632,12 @@ def _extract_sheet_semantics(
                     "source_region_label": _region_text(source_region, "label"),
                     "sheet_dimension": dimension,
                     "mapping_confidence": mapping_confidence.to_json(),
+                    "classification": {
+                        "row_classification": row_classification,
+                        "row_caption": row_caption,
+                        "is_active": is_active,
+                        "inactive_reason": inactive_reason,
+                    },
                     "ownership": {
                         "unit_source": own.unit_source,
                         "buyer_source": own.buyer_source,
@@ -606,6 +720,46 @@ def _extract_sheet_semantics(
     return facts, semantic_regions
 
 
+def _reclassify_leaf_grain(facts: list[SemanticFact]) -> list[SemanticFact]:
+    """Promote per-metric rollups to ``detail`` when no finer grain exists.
+
+    Aggregation defaults to the ``detail`` grain so query totals match the
+    workbook without double-counting (summing buyer detail *and* the unit
+    subtotal that already includes it). But some metrics (e.g. unit T/Stock)
+    only ever appear as a single per-unit value with no buyer-level breakdown;
+    their cells are formulas and were tentatively marked ``subtotal``.
+
+    For each metric, if there are no genuine ``detail`` facts but there are
+    unit-scoped ``subtotal`` facts, those subtotals *are* the leaf grain — they
+    are promoted to ``detail`` so the metric still has a leaf level that sums to
+    the workbook total. Grand Total and Previous Day rows are never touched, so
+    they remain separate from the detail grain.
+    """
+    metrics_with_detail: set[tuple[str, str]] = set()
+    for fact in facts:
+        if fact.row_classification == CLASS_DETAIL and fact.is_active:
+            metrics_with_detail.add((fact.source_sheet_name, fact.metric_key))
+
+    promoted: list[SemanticFact] = []
+    for fact in facts:
+        if (
+            fact.row_classification == CLASS_SUBTOTAL
+            and fact.unit
+            and (fact.source_sheet_name, fact.metric_key) not in metrics_with_detail
+        ):
+            new_metadata = dict(fact.metadata)
+            classification_meta = dict(new_metadata.get("classification") or {})
+            classification_meta["row_classification"] = CLASS_DETAIL
+            classification_meta["promoted_from"] = CLASS_SUBTOTAL
+            new_metadata["classification"] = classification_meta
+            promoted.append(
+                replace(fact, row_classification=CLASS_DETAIL, metadata=new_metadata)
+            )
+        else:
+            promoted.append(fact)
+    return promoted
+
+
 def _summary_rows(facts: list[SemanticFact]) -> list[JsonObject]:
     grouped: dict[tuple[str, str | None, str | None, str | None], JsonObject] = {}
     for fact in facts:
@@ -686,6 +840,10 @@ def extract_workbook_semantics(
             }
         )
 
+    # MD07-2B: reconcile the leaf grain per metric so default aggregation sums
+    # to the workbook total without double-counting detail + subtotal.
+    facts = _reclassify_leaf_grain(facts)
+
     semantic_mapping: JsonObject = {
         "version": 3,
         "engine": "workbook_ownership_resolver",
@@ -749,6 +907,9 @@ def build_operational_fact_models(
                 is_formula=fact.is_formula,
                 formula=fact.formula,
                 calculated_state=fact.calculated_state,
+                row_classification=fact.row_classification,
+                is_active=fact.is_active,
+                inactive_reason=fact.inactive_reason,
                 source_sheet_name=fact.source_sheet_name,
                 source_sheet_index=fact.source_sheet_index,
                 source_cell_address=fact.source_cell_address,
@@ -794,6 +955,34 @@ async def persist_workbook_semantics(
     }
     await session.flush()
     return extraction
+
+
+async def rebuild_workbook_semantics(
+    session: AsyncSession,
+    *,
+    uploaded_file: UploadedFile,
+    actor: AuthUser,
+) -> SemanticExtraction:
+    """Re-run semantic extraction for an already-uploaded workbook (MD07-2B §7).
+
+    Uses the parsed sheet metadata already persisted on ``uploaded_file`` — no
+    re-upload and no workbook re-parse are required. This recomputes formula
+    values, ownership, row classifications, and the active/inactive flags, then
+    replaces the workbook's operational facts. Existing uploads therefore gain
+    the MD07-2B stabilization (evaluated T/Stock, separated Grand Total /
+    Previous Day, sanitised buyers) without the user re-uploading.
+
+    The previously parsed ``semantic_mapping`` is stripped before re-extraction
+    so a stale mapping never feeds back into itself.
+    """
+    metadata = dict(uploaded_file.metadata_ or {})
+    metadata.pop("semantic_mapping", None)
+    return await persist_workbook_semantics(
+        session,
+        uploaded_file=uploaded_file,
+        actor=actor,
+        workbook_metadata=metadata,
+    )
 
 
 def _cell_data_type(value: Any) -> str:

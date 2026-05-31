@@ -38,6 +38,7 @@ type FilterState = {
   unit: string;
   metric: string;
   section: string;
+  classification: string;
   report_type_id: string;
   report_date: string;
   date_from: string;
@@ -50,6 +51,7 @@ const EMPTY_FILTERS: FilterState = {
   unit: "",
   metric: "",
   section: "",
+  classification: "",
   report_type_id: "",
   report_date: "",
   date_from: "",
@@ -65,6 +67,32 @@ const GROUP_BY_OPTIONS: { value: GroupByDimension; label: string }[] = [
   { value: "section", label: "Section" },
   { value: "metric", label: "Metric" },
 ];
+
+// MD07-2B: explicit rollup taxonomy. Each grain is queried separately so Grand
+// Total and Previous Day never mix with detail values or each other.
+const CLASSIFICATION_OPTIONS: { value: string; label: string }[] = [
+  { value: "detail", label: "Detail" },
+  { value: "subtotal", label: "Subtotal" },
+  { value: "grand_total", label: "Grand Total" },
+  { value: "previous_day", label: "Previous Day" },
+  { value: "summary", label: "Summary" },
+];
+
+const CLASSIFICATION_LABEL: Record<string, string> = {
+  detail: "Detail",
+  subtotal: "Subtotal",
+  grand_total: "Grand Total",
+  previous_day: "Previous Day",
+  summary: "Summary",
+};
+
+const CLASSIFICATION_TONE: Record<string, string> = {
+  detail: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300",
+  subtotal: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200",
+  grand_total: "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200",
+  previous_day: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200",
+  summary: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200",
+};
 
 function formatNumber(value: string | number | null | undefined) {
   if (value === null || value === undefined || value === "") {
@@ -86,6 +114,11 @@ function factValue(fact: OperationalFact) {
   }
   if (fact.value_type === "boolean") {
     return fact.value_boolean ? "TRUE" : "FALSE";
+  }
+  // MD07-2B: a formula with an evaluated numeric value shows the number, never
+  // the formula text. Only fall back to the formula string when no value exists.
+  if (fact.value_numeric !== null && fact.value_numeric !== undefined) {
+    return formatNumber(fact.value_numeric);
   }
   if (fact.is_formula) {
     return fact.formula ?? "Formula";
@@ -138,6 +171,7 @@ export function OperationalQueryModule() {
     if (filters.unit) params.unit = filters.unit;
     if (filters.metric) params.metric = filters.metric;
     if (filters.section) params.section = filters.section;
+    if (filters.classification) params.classification = filters.classification;
     if (filters.report_type_id) params.report_type_id = filters.report_type_id;
     if (filters.report_date) params.report_date = filters.report_date;
     if (filters.date_from) params.date_from = filters.date_from;
@@ -155,6 +189,7 @@ export function OperationalQueryModule() {
     unit: filters.unit || undefined,
     metric: filters.metric || undefined,
     section: filters.section || undefined,
+    classification: filters.classification || undefined,
     report_type_id: filters.report_type_id || undefined,
     report_date: filters.report_date || undefined,
     date_from: filters.date_from || undefined,
@@ -170,6 +205,15 @@ export function OperationalQueryModule() {
         field: "metric_label",
         minWidth: 160,
         flex: 1.4,
+        // MD07-2B: a Grand Total / Previous Day row shows its rollup identity,
+        // never a generic metric or T/Stock label.
+        valueGetter: (params) => {
+          const fact = params.data;
+          if (!fact) return "";
+          if (fact.row_classification === "grand_total") return "Grand Total";
+          if (fact.row_classification === "previous_day") return "Previous Day";
+          return fact.metric_label;
+        },
       },
       { headerName: "Buyer", field: "buyer", minWidth: 110, flex: 1 },
       { headerName: "Unit", field: "unit", minWidth: 100, flex: 1 },
@@ -178,6 +222,26 @@ export function OperationalQueryModule() {
         field: "operational_section_label",
         minWidth: 140,
         flex: 1,
+      },
+      {
+        headerName: "Class",
+        colId: "classification",
+        minWidth: 120,
+        sortable: true,
+        valueGetter: (params) => params.data?.row_classification ?? "",
+        cellRenderer: (params: ICellRendererParams<OperationalFact>) => {
+          const band = params.data?.row_classification ?? "detail";
+          return (
+            <span
+              className={cn(
+                "rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                CLASSIFICATION_TONE[band] ?? CLASSIFICATION_TONE.detail,
+              )}
+            >
+              {CLASSIFICATION_LABEL[band] ?? band}
+            </span>
+          );
+        },
       },
       {
         headerName: "Date",
@@ -339,6 +403,13 @@ export function OperationalQueryModule() {
             onChange={(value) => updateFilter("section", value)}
             options={dimensionData?.sections ?? []}
             placeholder="All sections"
+          />
+          <FilterSelect
+            label="Classification"
+            value={filters.classification}
+            onChange={(value) => updateFilter("classification", value)}
+            options={CLASSIFICATION_OPTIONS}
+            placeholder="All (detail grain)"
           />
           <FilterSelect
             label="Report type"

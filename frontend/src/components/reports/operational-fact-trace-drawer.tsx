@@ -56,6 +56,23 @@ export function OperationalFactTraceDrawer({ factId, onClose }: Props) {
       }
     | undefined;
 
+  const classificationLabel = (value?: string) => {
+    switch (value) {
+      case "detail":
+        return "Detail";
+      case "subtotal":
+        return "Subtotal";
+      case "grand_total":
+        return "Grand Total";
+      case "previous_day":
+        return "Previous Day";
+      case "summary":
+        return "Summary";
+      default:
+        return value ?? "—";
+    }
+  };
+
   const ownershipSourceLabel = (source?: string) => {
     switch (source) {
       case "merged_inheritance":
@@ -117,10 +134,45 @@ export function OperationalFactTraceDrawer({ factId, onClose }: Props) {
             <>
               <section className="rounded-md border bg-background/60 p-3">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Query verification
+                </div>
+                <div className="mt-2 grid">
+                  <Row label="Workbook" value={data.workbook.original_filename} />
+                  <Row label="Sheet" value={data.sheet_name} />
+                  <Row label="Cell" value={data.cell_address} mono />
+                  <Row label="Formula" value={data.fact.formula} mono />
+                  <Row
+                    label="Numeric value"
+                    value={data.fact.value_numeric}
+                    mono
+                  />
+                  <Row label="Classification" value={classificationLabel(data.fact.row_classification)} />
+                  <Row
+                    label="Ownership source"
+                    value={ownershipSourceLabel(
+                      data.fact.buyer ? ownership?.buyer_source : ownership?.unit_source,
+                    )}
+                  />
+                  <Row label="Confidence" value={confidence?.overall} />
+                  <Row label="Active" value={data.fact.is_active ? "Yes" : `No (${data.fact.inactive_reason ?? "—"})`} />
+                </div>
+              </section>
+
+              <section className="rounded-md border bg-background/60 p-3">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                   Operational fact
                 </div>
                 <div className="mt-2 grid">
-                  <Row label="Metric" value={data.fact.metric_label} />
+                  <Row
+                    label="Metric"
+                    value={
+                      data.fact.row_classification === "grand_total"
+                        ? "Grand Total"
+                        : data.fact.row_classification === "previous_day"
+                          ? "Previous Day"
+                          : data.fact.metric_label
+                    }
+                  />
                   <Row label="Buyer" value={data.fact.buyer} />
                   <Row label="Unit" value={data.fact.unit} />
                   <Row label="Report date" value={data.fact.report_date} />
@@ -130,11 +182,14 @@ export function OperationalFactTraceDrawer({ factId, onClose }: Props) {
                     value={
                       data.fact.value_type === "number"
                         ? data.fact.value_numeric
-                        : data.fact.value_type === "date"
-                          ? data.fact.value_date
-                          : data.fact.value_type === "boolean"
-                            ? data.fact.value_boolean
-                            : data.fact.value_text
+                        : data.fact.value_numeric !== null &&
+                            data.fact.value_numeric !== undefined
+                          ? data.fact.value_numeric
+                          : data.fact.value_type === "date"
+                            ? data.fact.value_date
+                            : data.fact.value_type === "boolean"
+                              ? data.fact.value_boolean
+                              : data.fact.value_text
                     }
                   />
                 </div>

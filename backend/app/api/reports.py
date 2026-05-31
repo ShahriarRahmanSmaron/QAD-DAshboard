@@ -32,6 +32,7 @@ from app.reporting.schemas import (
     ReportSummaryListResponse,
     SemanticDiagnosticsResponse,
     WorkbookExportRequest,
+    WorkbookRebuildResponse,
     WorkbookSemanticBreakdownResponse,
     WorkbookSemanticDiagnosticsBundle,
     WorkbookSemanticRegionResponse,
@@ -42,6 +43,7 @@ from app.reporting.service import (
     create_report,
     create_report_metric,
     create_report_row,
+    rebuild_operational_facts,
     serialize_metric,
     serialize_operational_aggregation,
     serialize_operational_comparison,
@@ -127,6 +129,8 @@ async def list_operational_facts(
     value_min: Decimal | None = None,
     value_max: Decimal | None = None,
     value_type: str | None = None,
+    classification: str | None = None,
+    include_inactive: bool = False,
     search: str | None = None,
 ) -> OperationalFactListResponse:
     filters = OperationalFactFilters(
@@ -144,6 +148,8 @@ async def list_operational_facts(
         value_min=value_min,
         value_max=value_max,
         value_type=value_type,
+        row_classification=classification,
+        include_inactive=include_inactive,
         search=search,
     )
     facts, total = await repository.list_operational_facts(
@@ -249,6 +255,7 @@ async def get_operational_summary(
     report_date: date | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    classification: str | None = None,
 ) -> OperationalSummaryResponse:
     filters = OperationalFactFilters(
         uploaded_file_id=uploaded_file_id,
@@ -260,6 +267,7 @@ async def get_operational_summary(
         report_date=report_date,
         date_from=date_from,
         date_to=date_to,
+        row_classification=classification,
     )
     rows = await repository.summarize_operational_facts(
         session,
@@ -290,6 +298,7 @@ async def get_operational_aggregation(
     date_to: date | None = None,
     value_min: Decimal | None = None,
     value_max: Decimal | None = None,
+    classification: str | None = None,
 ) -> OperationalAggregationResponse:
     """Grouped operational totals.
 
@@ -297,6 +306,10 @@ async def get_operational_aggregation(
     report_date, report_type, workbook. Without it, only the grand total is
     returned. Covers totals, grouped totals, buyer totals, unit totals, and
     section totals from a single endpoint.
+
+    ``classification`` pins the rollup grain (detail / subtotal / grand_total /
+    previous_day / summary). When omitted the detail grain is used so totals
+    match the workbook without double-counting.
     """
     filters = OperationalFactFilters(
         uploaded_file_id=uploaded_file_id,
@@ -312,6 +325,7 @@ async def get_operational_aggregation(
         date_to=date_to,
         value_min=value_min,
         value_max=value_max,
+        row_classification=classification,
     )
     rows, overall = await repository.aggregate_operational_facts(
         session,
@@ -337,6 +351,7 @@ async def get_operational_trend(
     section: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    classification: str | None = None,
     limit: Annotated[int, Query(ge=1, le=365)] = 180,
 ) -> OperationalTrendResponse:
     """History/trend retrieval for buyer+metric, unit+metric, buyer+unit+metric."""
@@ -349,6 +364,7 @@ async def get_operational_trend(
         operational_section=section,
         date_from=date_from,
         date_to=date_to,
+        classification=classification,
         limit=limit,
     )
     return serialize_operational_trend(
@@ -370,6 +386,7 @@ async def get_operational_comparison(
     buyer: str | None = None,
     unit: str | None = None,
     section: str | None = None,
+    classification: str | None = None,
 ) -> OperationalComparisonResponse:
     """Previous-day / nearest-previous-record comparison with delta indicators.
 
@@ -385,6 +402,7 @@ async def get_operational_comparison(
         buyer=buyer,
         unit=unit,
         operational_section=section,
+        classification=classification,
     )
     return serialize_operational_comparison(comparison)
 
@@ -539,6 +557,52 @@ async def get_workbook_diagnostics(
         confidence_counts=confidence_counts,
         semantic_mapping=semantic_mapping if isinstance(semantic_mapping, dict) else {},
     )
+
+
+@router.post(
+    "/operations/rebuild",
+    response_model=WorkbookRebuildResponse,
+)
+async def rebuild_all_operational_facts(
+    session: SessionDep,
+    user: ReportWriterDep,
+) -> WorkbookRebuildResponse:
+    """Rebuild operational facts for every accessible workbook (MD07-2B §7).
+
+    Re-runs semantic extraction from each workbook's stored metadata so existing
+    uploads gain evaluated formula values, separated Grand Total / Previous Day
+    rows, classifications, and sanitised buyers — without re-uploading.
+    """
+    try:
+        result = await rebuild_operational_facts(session, actor=user)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return result
+
+
+@router.post(
+    "/workbooks/{uploaded_file_id}/rebuild",
+    response_model=WorkbookRebuildResponse,
+)
+async def rebuild_workbook_operational_facts(
+    uploaded_file_id: UUID,
+    session: SessionDep,
+    user: ReportWriterDep,
+) -> WorkbookRebuildResponse:
+    """Rebuild operational facts for a single uploaded workbook (MD07-2B §7)."""
+    try:
+        result = await rebuild_operational_facts(
+            session,
+            actor=user,
+            uploaded_file_id=uploaded_file_id,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return result
 
 
 @router.post("", response_model=ReportResponse, status_code=status.HTTP_201_CREATED)

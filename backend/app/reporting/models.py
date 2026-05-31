@@ -584,6 +584,17 @@ class OperationalFact(TimestampMixin, SoftDeleteMixin, AuditFieldsMixin, Base):
         nullable=False,
         server_default=text("'static'"),
     )
+    row_classification: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default=text("'detail'"),
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("true"),
+    )
+    inactive_reason: Mapped[str | None] = mapped_column(String(64))
     source_sheet_name: Mapped[str] = mapped_column(String(255), nullable=False)
     source_sheet_index: Mapped[int | None] = mapped_column(Integer)
     source_cell_address: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -629,6 +640,11 @@ class OperationalFact(TimestampMixin, SoftDeleteMixin, AuditFieldsMixin, Base):
             name="operational_facts_calculated_state_check",
         ),
         CheckConstraint(
+            "row_classification in "
+            "('detail', 'subtotal', 'grand_total', 'previous_day', 'summary')",
+            name="operational_facts_row_classification_check",
+        ),
+        CheckConstraint(
             "source_row_number > 0 and source_column_number > 0",
             name="operational_facts_source_position_positive",
         ),
@@ -646,6 +662,15 @@ class OperationalFact(TimestampMixin, SoftDeleteMixin, AuditFieldsMixin, Base):
         Index("operational_facts_metric_key_idx", "metric_key"),
         Index("operational_facts_buyer_metric_date_idx", "buyer", "metric_key", "report_date"),
         Index("operational_facts_unit_metric_date_idx", "unit", "metric_key", "report_date"),
+        # MD07-2B: classification + active-fact query indexes.
+        Index("operational_facts_is_active_idx", "is_active"),
+        Index("operational_facts_classification_idx", "row_classification"),
+        Index(
+            "operational_facts_active_metric_date_idx",
+            "is_active",
+            "metric_key",
+            "report_date",
+        ),
         Index(
             "operational_facts_upload_source_active_key",
             "uploaded_file_id",

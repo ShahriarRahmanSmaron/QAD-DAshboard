@@ -120,6 +120,80 @@ def is_rollup_label(value: str | None) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Row classification taxonomy (MD07-2B: rollup classification layer)
+# ---------------------------------------------------------------------------
+
+# Explicit, mutually-exclusive classifications for an operational fact's row.
+# These let aggregation keep Grand Total, Previous Day, and detail values as
+# distinct semantic concepts so they can never be mixed.
+CLASS_DETAIL = "detail"
+CLASS_SUBTOTAL = "subtotal"
+CLASS_GRAND_TOTAL = "grand_total"
+CLASS_PREVIOUS_DAY = "previous_day"
+CLASS_SUMMARY = "summary"
+
+CLASSIFICATION_CHOICES = (
+    CLASS_DETAIL,
+    CLASS_SUBTOTAL,
+    CLASS_GRAND_TOTAL,
+    CLASS_PREVIOUS_DAY,
+    CLASS_SUMMARY,
+)
+
+# Marker phrases that identify each rollup classification from a row/label
+# caption. Order matters: ``grand_total`` and ``previous_day`` are checked
+# before the generic ``subtotal``/``summary`` so a "Grand Total" row is never
+# collapsed into a plain subtotal, and a "Previous Day" row is never treated as
+# a grand total. These are structural bookkeeping captions, not business
+# vocabulary, so they generalise across operational workbook formats.
+_PREVIOUS_DAY_MARKERS: tuple[str, ...] = ("previous day", "prev day", "previous date")
+_GRAND_TOTAL_MARKERS: tuple[str, ...] = ("grand total", "grand tot")
+_SUBTOTAL_MARKERS: tuple[str, ...] = ("sub total", "subtotal", "section total", "buyer total")
+_SUMMARY_MARKERS: tuple[str, ...] = ("running day", "closing", "summary", "total")
+
+
+def classify_row(
+    *,
+    row_label: str | None,
+    is_rollup: bool,
+    is_formula: bool,
+) -> str:
+    """Classify a fact's row into the rollup taxonomy.
+
+    The label caption is authoritative: a row literally labelled "Grand Total"
+    is ``grand_total``; "Previous Day" is ``previous_day``; "Sub Total" /
+    "Section Total" is ``subtotal``. A label-less aggregate (a formula or
+    rollup cell with no governing caption) is ``summary``. Everything else is a
+    ``detail`` leaf. Grand Total and Previous Day are deliberately separated so
+    aggregation never mixes them.
+    """
+    token = normalize_token(str(row_label)) if row_label else ""
+    if token:
+        if any(marker in token for marker in _PREVIOUS_DAY_MARKERS):
+            return CLASS_PREVIOUS_DAY
+        if any(marker in token for marker in _GRAND_TOTAL_MARKERS):
+            return CLASS_GRAND_TOTAL
+        if any(marker in token for marker in _SUBTOTAL_MARKERS):
+            return CLASS_SUBTOTAL
+        if any(marker in token for marker in _SUMMARY_MARKERS):
+            return CLASS_SUMMARY
+    if is_rollup or is_formula:
+        return CLASS_SUMMARY
+    return CLASS_DETAIL
+
+
+def is_composite_label(value: str | None) -> bool:
+    """``True`` when a value joins multiple ownership chains (e.g. ``A / B``).
+
+    Public wrapper over the composite-detection rule so the sanitation layer
+    can reject legacy composite buyers without re-implementing the heuristic.
+    """
+    if value is None:
+        return False
+    return _looks_composite(str(value))
+
+
+# ---------------------------------------------------------------------------
 # Header role detection (column-role captions, not business values)
 # ---------------------------------------------------------------------------
 

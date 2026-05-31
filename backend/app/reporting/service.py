@@ -42,6 +42,8 @@ from app.reporting.schemas import (
     ReportRowCreateRequest,
     ReportRowResponse,
     ReportSummary,
+    WorkbookRebuildResponse,
+    WorkbookRebuildResult,
 )
 
 
@@ -117,6 +119,9 @@ def serialize_operational_fact(fact: OperationalFact) -> OperationalFactResponse
         is_formula=fact.is_formula,
         formula=fact.formula,
         calculated_state=fact.calculated_state,
+        row_classification=fact.row_classification,
+        is_active=fact.is_active,
+        inactive_reason=fact.inactive_reason,
         source_sheet_name=fact.source_sheet_name,
         source_sheet_index=fact.source_sheet_index,
         source_cell_address=fact.source_cell_address,
@@ -922,3 +927,109 @@ async def transition_report_workflow(
     )
     await session.flush()
     return report
+
+
+async def rebuild_operational_facts(
+    session: AsyncSession,
+    *,
+    actor: AuthUser,
+    uploaded_file_id: UUID | None = None,
+) -> WorkbookRebuildResponse:
+    """Rebuild operational facts for one workbook or every accessible workbook.
+
+    MD07-2B §7 rebuild path: re-runs semantic extraction from each workbook's
+    already-parsed metadata (no re-upload), so existing uploads gain evaluated
+    formula values, separated Grand Total / Previous Day rows, row
+    classifications, and sanitised buyers. Returns a per-workbook summary.
+    """
+    from app.reporting.workbook_semantics import rebuild_workbook_semantics
+
+    if uploaded_file_id is not None:
+        target = await repository.get_accessible_uploaded_file(
+            session,
+            uploaded_file_id=uploaded_file_id,
+            user=actor,
+        )
+        if target is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Workbook not found.",
+            )
+        uploaded_files = [target]
+    else:
+        uploaded_files = await repository.list_accessible_uploaded_files(session, user=actor)
+
+    results: list[WorkbookRebuildResult] = []
+    rebuilt = 0
+    failed = 0
+    for uploaded_file in uploaded_files:
+        metadata = uploaded_file.metadata_ or {}
+        # Skip workbooks that were never parsed into sheets (nothing to rebuild).
+        if not isinstance(metadata, dict) or not metadata.get("sheets"):
+            results.append(
+                WorkbookRebuildResult(
+                    uploaded_file_id=uploaded_file.id,
+                    original_filename=uploaded_file.original_filename,
+                    status="skipped",
+                    error="No parsed workbook metadata to rebuild from.",
+                )
+            )
+            continue
+        try:
+            extraction = await rebuild_workbook_semantics(
+                session,
+                uploaded_file=uploaded_file,
+                actor=actor,
+            )
+        except Exception as exc:  # noqa: BLE001 - report per-workbook, keep going
+            failed += 1
+            results.append(
+                WorkbookRebuildResult(
+                    uploaded_file_id=uploaded_file.id,
+                    original_filename=uploaded_file.original_filename,
+                    status="failed",
+                    error=str(exc),
+                )
+            )
+            continue
+
+        classification_counts: dict[str, int] = {}
+        active = 0
+        inactive = 0
+        for fact in extraction.facts:
+            classification_counts[fact.row_classification] = (
+                classification_counts.get(fact.row_classification, 0) + 1
+            )
+            if fact.is_active:
+                active += 1
+            else:
+                inactive += 1
+
+        rebuilt += 1
+        results.append(
+            WorkbookRebuildResult(
+                uploaded_file_id=uploaded_file.id,
+                original_filename=uploaded_file.original_filename,
+                status="rebuilt",
+                fact_count=len(extraction.facts),
+                active_fact_count=active,
+                inactive_fact_count=inactive,
+                classification_counts=classification_counts,
+            )
+        )
+
+    add_audit_log(
+        session,
+        actor=actor,
+        action="operational_facts.rebuilt",
+        target_type="uploaded_file",
+        target_id=uploaded_file_id or actor.id,
+        metadata={
+            "scope": "single" if uploaded_file_id else "all",
+            "rebuilt": rebuilt,
+            "failed": failed,
+            "workbook_count": len(uploaded_files),
+        },
+    )
+    await session.flush()
+    return WorkbookRebuildResponse(rebuilt=rebuilt, failed=failed, results=results)

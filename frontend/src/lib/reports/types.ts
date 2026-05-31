@@ -253,6 +253,9 @@ export type OperationalFact = {
   is_formula: boolean;
   formula: string | null;
   calculated_state: string;
+  row_classification: string;
+  is_active: boolean;
+  inactive_reason: string | null;
   source_sheet_name: string;
   source_sheet_index: number | null;
   source_cell_address: string;
@@ -365,6 +368,23 @@ export type OperationalDimensionsResponse = {
   metrics: OperationalDimensionOption[];
   sections: OperationalDimensionOption[];
   dates: OperationalDimensionOption[];
+};
+
+export type WorkbookRebuildResult = {
+  uploaded_file_id: string;
+  original_filename: string | null;
+  status: string;
+  fact_count: number;
+  active_fact_count: number;
+  inactive_fact_count: number;
+  classification_counts: Record<string, number>;
+  error: string | null;
+};
+
+export type WorkbookRebuildResponse = {
+  rebuilt: number;
+  failed: number;
+  results: WorkbookRebuildResult[];
 };
 
 export type OperationalFactTraceWorkbook = {
