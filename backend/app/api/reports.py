@@ -371,6 +371,7 @@ async def get_operational_trend(
     buyer: str | None = None,
     unit: str | None = None,
     section: str | None = None,
+    report_type_id: UUID | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
     classification: str | None = None,
@@ -384,6 +385,7 @@ async def get_operational_trend(
         buyer=buyer,
         unit=unit,
         operational_section=section,
+        report_type_id=report_type_id,
         date_from=date_from,
         date_to=date_to,
         classification=classification,
@@ -408,6 +410,7 @@ async def get_operational_comparison(
     buyer: str | None = None,
     unit: str | None = None,
     section: str | None = None,
+    report_type_id: UUID | None = None,
     classification: str | None = None,
 ) -> OperationalComparisonResponse:
     """Previous-day / nearest-previous-record comparison with delta indicators.
@@ -424,6 +427,7 @@ async def get_operational_comparison(
         buyer=buyer,
         unit=unit,
         operational_section=section,
+        report_type_id=report_type_id,
         classification=classification,
     )
     return serialize_operational_comparison(comparison)
@@ -433,9 +437,16 @@ async def get_operational_comparison(
 async def get_operational_dimensions(
     session: SessionDep,
     user: ReportReaderDep,
+    report_type_id: UUID | None = None,
 ) -> OperationalDimensionsResponse:
-    """Distinct buyer/unit/metric/section/date values for filter dropdowns."""
-    data = await repository.list_operational_dimensions(session, user=user)
+    """Distinct buyer/unit/metric/section/date values for filter dropdowns.
+
+    MD07-5 Phase 4: scoped by ``report_type_id`` when supplied so dropdowns
+    only surface dimensions from the selected report type.
+    """
+    data = await repository.list_operational_dimensions(
+        session, user=user, report_type_id=report_type_id
+    )
     return serialize_operational_dimensions(data)
 
 
@@ -743,6 +754,8 @@ async def get_active_workbook_sources(
             ActiveWorkbookSource(
                 workbook_id=row["workbook_id"],
                 filename=row["filename"],
+                report_type_id=row.get("report_type_id"),
+                report_type_name=row.get("report_type_name"),
                 report_date=_active_source_report_date(row.get("report_date_text")),
                 uploaded_at=row["uploaded_at"],
                 operational_fact_count=int(row.get("operational_fact_count") or 0),

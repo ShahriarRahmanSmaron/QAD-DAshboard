@@ -24,7 +24,7 @@ const navigation = [
     roles: ["admin", "editor", "viewer"],
   },
   {
-    label: "Report Grid",
+    label: "Workbook Manager",
     href: "/reports/grid",
     icon: ClipboardCheck,
     roles: ["admin", "editor", "viewer"],

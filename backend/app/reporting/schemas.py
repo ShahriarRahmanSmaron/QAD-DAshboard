@@ -317,6 +317,8 @@ class WorkbookDuplicateInfo(BaseModel):
 class ActiveWorkbookSource(BaseModel):
     workbook_id: UUID
     filename: str
+    report_type_id: UUID | None = None
+    report_type_name: str | None = None
     report_date: date | None = None
     uploaded_at: datetime
     operational_fact_count: int = 0

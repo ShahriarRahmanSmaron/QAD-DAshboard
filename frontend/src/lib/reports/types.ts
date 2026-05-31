@@ -898,6 +898,8 @@ export type WorkbookDuplicateInfo = {
 export type ActiveWorkbookSource = {
   workbook_id: string;
   filename: string;
+  report_type_id: string | null;
+  report_type_name: string | null;
   report_date: string | null;
   uploaded_at: string;
   operational_fact_count: number;

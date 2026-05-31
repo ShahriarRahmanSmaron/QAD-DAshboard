@@ -439,10 +439,13 @@ async def list_active_workbook_sources(
             UploadedFile.id.label("workbook_id"),
             UploadedFile.original_filename.label("filename"),
             UploadedFile.created_at.label("uploaded_at"),
+            UploadedFile.report_type_id,
+            ReportType.name.label("report_type_name"),
             _workbook_report_date_expr(),
             fact_count_sq,
         )
         .select_from(UploadedFile)
+        .join(ReportType, ReportType.id == UploadedFile.report_type_id, isouter=True)
         .where(
             UploadedFile.deleted_at.is_(None),
             UploadedFile.is_active_workbook.is_(True),
@@ -829,6 +832,7 @@ async def get_operational_trend(
     buyer: str | None = None,
     unit: str | None = None,
     operational_section: str | None = None,
+    report_type_id: UUID | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
     classification: str | None = None,
@@ -845,6 +849,7 @@ async def get_operational_trend(
         buyer=buyer,
         unit=unit,
         operational_section=operational_section,
+        report_type_id=report_type_id,
         date_from=date_from,
         date_to=date_to,
         row_classification=classification,
@@ -884,6 +889,7 @@ async def get_nearest_previous_date(
     buyer: str | None = None,
     unit: str | None = None,
     operational_section: str | None = None,
+    report_type_id: UUID | None = None,
 ) -> date | None:
     """Return the closest operational_date strictly before ``reference_date``.
 
@@ -895,6 +901,7 @@ async def get_nearest_previous_date(
         buyer=buyer,
         unit=unit,
         operational_section=operational_section,
+        report_type_id=report_type_id,
     )
     clauses = _operational_fact_filters(user, filters)
     clauses.append(OperationalFact.report_date.is_not(None))
@@ -919,6 +926,7 @@ async def get_operational_comparison(
     buyer: str | None = None,
     unit: str | None = None,
     operational_section: str | None = None,
+    report_type_id: UUID | None = None,
     classification: str | None = None,
 ) -> dict[str, Any]:
     """Compare current vs previous operational totals for a metric.
@@ -940,6 +948,7 @@ async def get_operational_comparison(
             buyer=buyer,
             unit=unit,
             operational_section=operational_section,
+            report_type_id=report_type_id,
         )
 
     async def _total_for(target: date | None) -> dict[str, Any]:
@@ -950,6 +959,7 @@ async def get_operational_comparison(
             buyer=buyer,
             unit=unit,
             operational_section=operational_section,
+            report_type_id=report_type_id,
             report_date=target,
             row_classification=classification,
         )
@@ -976,6 +986,7 @@ async def get_operational_comparison(
         buyer=buyer,
         unit=unit,
         operational_section=operational_section,
+        report_type_id=report_type_id,
     )
     previous_sources = await get_workbook_sources_for_date(
         session,
@@ -985,6 +996,7 @@ async def get_operational_comparison(
         buyer=buyer,
         unit=unit,
         operational_section=operational_section,
+        report_type_id=report_type_id,
     )
     return {
         "metric_key": metric_key,
@@ -1009,6 +1021,7 @@ async def get_workbook_sources_for_date(
     buyer: str | None = None,
     unit: str | None = None,
     operational_section: str | None = None,
+    report_type_id: UUID | None = None,
 ) -> list[dict[str, Any]]:
     """Return the active source workbook(s) feeding a date (MD07-3 Phase 4).
 
@@ -1023,6 +1036,7 @@ async def get_workbook_sources_for_date(
         buyer=buyer,
         unit=unit,
         operational_section=operational_section,
+        report_type_id=report_type_id,
         report_date=report_date,
     )
     clauses = _operational_fact_filters(user, _with_default_grain(filters))
@@ -1067,6 +1081,7 @@ async def list_operational_dimensions(
     session: AsyncSession,
     *,
     user: AuthUser,
+    report_type_id: UUID | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Return distinct filter options that actually appear in operational facts.
 
@@ -1076,6 +1091,10 @@ async def list_operational_dimensions(
 
     MD07-2B: dropdowns surface only *active* facts, so legacy composite /
     ambiguous buyers (soft-cleaned via ``is_active = false``) never appear.
+
+    MD07-5 Phase 4: when ``report_type_id`` is supplied, dropdown values are
+    scoped to that report type so filters from different report types never
+    pollute each other.
     """
     base_filters = [
         OperationalFact.deleted_at.is_(None),
@@ -1086,6 +1105,8 @@ async def list_operational_dimensions(
         UploadedFile.archived_at.is_(None),
         _uploaded_file_access_filter(user),
     ]
+    if report_type_id is not None:
+        base_filters.append(UploadedFile.report_type_id == report_type_id)
 
     async def _distinct(value_col: Any, label_col: Any) -> list[dict[str, Any]]:
         stmt = (

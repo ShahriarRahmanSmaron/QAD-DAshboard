@@ -28,10 +28,10 @@ import {
 
 const OPERATIONAL_STALE_TIME = 30_000;
 
-export function useOperationalDimensions() {
+export function useOperationalDimensions(reportTypeId?: string) {
   return useQuery({
-    queryKey: ["operations", "dimensions"],
-    queryFn: getOperationalDimensions,
+    queryKey: ["operations", "dimensions", reportTypeId ?? null],
+    queryFn: () => getOperationalDimensions(reportTypeId),
     staleTime: 300_000,
   });
 }

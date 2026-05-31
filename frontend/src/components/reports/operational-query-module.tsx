@@ -151,7 +151,7 @@ export function OperationalQueryModule() {
   const [groupBy, setGroupBy] = useState<GroupByDimension[]>(["buyer"]);
   const [traceFactId, setTraceFactId] = useState<string | null>(null);
 
-  const dimensions = useOperationalDimensions();
+  const dimensions = useOperationalDimensions(filters.report_type_id || undefined);
   const reportTypesQuery = useQuery({
     queryKey: ["report-types"],
     queryFn: listReportTypes,
@@ -321,7 +321,19 @@ export function OperationalQueryModule() {
   );
 
   function updateFilter(key: keyof FilterState, value: string) {
-    setFilters((current) => ({ ...current, [key]: value }));
+    setFilters((current) => {
+      const next = { ...current, [key]: value };
+      // MD07-5 Phase 4: changing report type re-scopes the dimension
+      // dropdowns, so dependent filters must reset to avoid stale values from
+      // another report type lingering.
+      if (key === "report_type_id") {
+        next.buyer = "";
+        next.unit = "";
+        next.metric = "";
+        next.section = "";
+      }
+      return next;
+    });
   }
 
   function applySearch() {
@@ -377,6 +389,13 @@ export function OperationalQueryModule() {
 
         <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           <FilterSelect
+            label="Report type"
+            value={filters.report_type_id}
+            onChange={(value) => updateFilter("report_type_id", value)}
+            options={reportTypeOptions}
+            placeholder="All report types"
+          />
+          <FilterSelect
             label="Buyer"
             value={filters.buyer}
             onChange={(value) => updateFilter("buyer", value)}
@@ -410,13 +429,6 @@ export function OperationalQueryModule() {
             onChange={(value) => updateFilter("classification", value)}
             options={CLASSIFICATION_OPTIONS}
             placeholder="All (detail grain)"
-          />
-          <FilterSelect
-            label="Report type"
-            value={filters.report_type_id}
-            onChange={(value) => updateFilter("report_type_id", value)}
-            options={reportTypeOptions}
-            placeholder="All report types"
           />
           <label className="grid gap-1 text-xs font-medium text-muted-foreground">
             Report date
@@ -556,6 +568,7 @@ export function OperationalQueryModule() {
         buyer={filters.buyer || null}
         unit={filters.unit || null}
         section={filters.section || null}
+        reportTypeId={filters.report_type_id || null}
       />
 
       <section className="rounded-md border bg-card/70 p-4 shadow-sm backdrop-blur">

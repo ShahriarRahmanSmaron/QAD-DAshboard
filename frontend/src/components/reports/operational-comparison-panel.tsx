@@ -12,6 +12,7 @@ type Props = {
   buyer?: string | null;
   unit?: string | null;
   section?: string | null;
+  reportTypeId?: string | null;
 };
 
 function formatNumber(value: string | number | null | undefined) {
@@ -44,6 +45,7 @@ export function OperationalComparisonPanel({
   buyer,
   unit,
   section,
+  reportTypeId,
 }: Props) {
   const comparisonParams: OperationalComparisonParams | null =
     metric && currentDate
@@ -53,6 +55,7 @@ export function OperationalComparisonPanel({
           buyer: buyer || undefined,
           unit: unit || undefined,
           section: section || undefined,
+          report_type_id: reportTypeId || undefined,
         }
       : null;
 
@@ -64,6 +67,7 @@ export function OperationalComparisonPanel({
           buyer: buyer || undefined,
           unit: unit || undefined,
           section: section || undefined,
+          report_type_id: reportTypeId || undefined,
           limit: 30,
         }
       : null,

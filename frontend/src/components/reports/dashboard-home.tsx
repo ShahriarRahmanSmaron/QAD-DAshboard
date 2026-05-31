@@ -17,8 +17,8 @@ import { useActiveWorkbookSources } from "@/lib/reports/operational-hooks";
 const QUICK_LINKS = [
   {
     href: "/reports/grid",
-    label: "Report Grid",
-    description: "Build reports and manage operational workbooks.",
+    label: "Workbook Manager",
+    description: "Upload, inventory, and manage operational workbooks.",
     icon: ClipboardCheck,
   },
   {
@@ -122,7 +122,7 @@ export function DashboardHome({ fullName }: { fullName: string | null }) {
         ))}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="grid gap-3 sm:grid-cols-2">
           {QUICK_LINKS.map((link) => (
             <Link
