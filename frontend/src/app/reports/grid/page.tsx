@@ -12,7 +12,7 @@ export default async function ReportGridPage() {
 
   return (
     <AppShell user={user}>
-      <ReportGridModule />
+      <ReportGridModule isAdmin={user.role === "admin"} />
     </AppShell>
   );
 }

@@ -1,5 +1,7 @@
+import logging
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -9,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.constants import UserRole
 from app.auth.schemas import AuthUser
+from app.core.config import settings
 from app.reporting import repository
 from app.reporting.models import (
     AuditLog,
@@ -47,6 +50,8 @@ from app.reporting.schemas import (
     WorkbookRebuildResponse,
     WorkbookRebuildResult,
 )
+
+logger = logging.getLogger("app.reporting.service")
 
 
 def _metadata(value: dict[str, Any]) -> dict[str, Any]:
@@ -1085,15 +1090,39 @@ def _workbook_report_date(metadata: dict[str, Any] | None) -> date | None:
     return None
 
 
+def _coerce_report_date(value: object) -> date | None:
+    """Parse a report_date that the query already extracted as ISO text.
+
+    The governance queries select ``metadata -> semantic_mapping ->>
+    report_date`` directly (instead of the whole metadata blob), so the row
+    carries a plain ISO string. ``None`` and unparseable values yield ``None``.
+    """
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
 def serialize_workbook_inventory_item(row: dict[str, Any]) -> WorkbookInventoryItem:
     """Convert a flat inventory row dict into a WorkbookInventoryItem."""
     status = str(row.get("status") or "")
+    # Prefer the directly-extracted report_date text (governance queries select
+    # only the JSONB path). Fall back to the full metadata blob for callers /
+    # tests that still pass it.
+    if "report_date_text" in row:
+        report_date = _coerce_report_date(row.get("report_date_text"))
+    else:
+        report_date = _workbook_report_date(row.get("metadata"))
     return WorkbookInventoryItem(
         workbook_id=row["workbook_id"],
         filename=row["filename"],
         report_type_id=row.get("report_type_id"),
         report_type_name=row.get("report_type_name"),
-        report_date=_workbook_report_date(row.get("metadata")),
+        report_date=report_date,
         uploaded_at=row["uploaded_at"],
         uploaded_by_user_id=row.get("uploaded_by_user_id"),
         status=status,
@@ -1259,10 +1288,15 @@ async def delete_workbook(
     uploaded_file_id: UUID,
     actor: AuthUser,
 ) -> None:
-    """Soft-delete a workbook and its operational facts (Phase 5, admin only).
+    """Permanently (hard) delete a workbook and its facts (Phase 5, admin only).
 
-    The workbook row and its facts are marked deleted (never hard-deleted) so
-    audit history is preserved and operational queries stop reading them.
+    MD07-4 Phase 5: deletion must remove data from the database. The workbook
+    record and all of its operational facts are physically removed from
+    ``uploaded_files`` and ``operational_facts`` so the workbook disappears
+    from the active source inventory and every operational query. Reports that
+    referenced the workbook keep their data (their ``source_file_id`` FK is
+    cleared by ``ON DELETE SET NULL``). An audit-log entry is still written so
+    the deletion itself remains traceable.
     """
     if actor.role != UserRole.ADMIN:
         raise HTTPException(
@@ -1281,25 +1315,69 @@ async def delete_workbook(
             detail="Workbook not found.",
         )
 
-    fact_count = await repository.soft_delete_workbook_facts(
+    original_filename = uploaded_file.original_filename
+    storage_bucket = uploaded_file.storage_bucket
+    storage_path = uploaded_file.storage_path
+
+    # Capture the audit entry *before* removing the row so the deletion stays
+    # traceable. The audit_logs table has no FK to uploaded_files, so the
+    # entry survives the hard delete.
+    fact_count = await repository.hard_delete_workbook_facts(
         session,
         uploaded_file_id=uploaded_file_id,
-        actor_id=actor.id,
     )
-
-    uploaded_file.deleted_at = datetime.now(UTC)
-    uploaded_file.deleted_by_user_id = actor.id
-    uploaded_file.is_active_workbook = False
 
     add_audit_log(
         session,
         actor=actor,
         action="workbook.deleted",
         target_type="uploaded_file",
-        target_id=uploaded_file.id,
+        target_id=uploaded_file_id,
         metadata={
-            "original_filename": uploaded_file.original_filename,
-            "soft_deleted_fact_count": fact_count,
+            "original_filename": original_filename,
+            "deleted_fact_count": fact_count,
+            "hard_delete": True,
         },
     )
+
+    # SQLAlchemy tracks ``uploaded_file`` in the identity map; expunge it before
+    # the bulk DELETE so the ORM does not attempt to flush a stale instance.
     await session.flush()
+    session.expunge(uploaded_file)
+    await repository.hard_delete_uploaded_file(
+        session,
+        uploaded_file_id=uploaded_file_id,
+    )
+    await session.flush()
+
+    # Best-effort cleanup of the stored blob on disk. A failure here must not
+    # roll back the database deletion, so it is logged and swallowed.
+    _remove_workbook_blob(storage_bucket, storage_path, uploaded_file_id)
+
+
+def _remove_workbook_blob(
+    storage_bucket: str | None,
+    storage_path: str | None,
+    uploaded_file_id: UUID,
+) -> None:
+    """Delete the on-disk workbook blob written at upload time (best effort)."""
+    if storage_bucket != "local" or not storage_path:
+        return
+    try:
+        configured_path = Path(settings.uploaded_workbook_storage_dir)
+        if configured_path.is_absolute():
+            storage_root = configured_path
+        else:
+            storage_root = Path(__file__).resolve().parents[2] / configured_path
+        base = storage_root.parent.resolve()
+        candidate = (base / storage_path).resolve()
+        # Guard against path traversal: only remove files under the storage root.
+        candidate.relative_to(base)
+        candidate.unlink(missing_ok=True)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "workbook blob cleanup failed: workbook=%s path=%s error=%s",
+            uploaded_file_id,
+            storage_path,
+            exc,
+        )

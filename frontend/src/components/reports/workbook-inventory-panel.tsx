@@ -6,6 +6,7 @@ import {
   ArchiveRestore,
   CheckCircle2,
   Database,
+  Eye,
   FileSpreadsheet,
   Loader2,
   PauseCircle,
@@ -14,6 +15,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { WorkbookDeleteModal } from "@/components/reports/workbook-delete-modal";
+import { WorkbookDetailsModal } from "@/components/reports/workbook-details-modal";
 import { Button } from "@/components/ui/button";
 import {
   activateWorkbook,
@@ -62,11 +65,13 @@ function formatDateTime(value: string | null | undefined) {
 }
 
 /**
- * Workbook Inventory panel (MD07-3 Phases 1, 2, 5).
+ * Workbook Inventory panel (MD07-3 Phases 1, 2, 5 + MD07-4 Phases 3, 4, 5, 8).
  *
- * Surfaces actual uploaded workbooks (not report templates) with their
- * governance state and live operational-fact counts. Each workbook can be
- * activated/deactivated, archived/restored, and (for admins) soft-deleted.
+ * Renders actual uploaded workbooks (not report templates) as a dense table
+ * with Workbook / Report Date / Uploaded / Fact Count / Status / Actions
+ * columns. Each workbook can be activated/deactivated, archived/restored,
+ * inspected (View Details), and — for admins — permanently hard-deleted via a
+ * confirmation modal.
  */
 export function WorkbookInventoryPanel({ isAdmin = false }: Props) {
   const queryClient = useQueryClient();
@@ -74,6 +79,9 @@ export function WorkbookInventoryPanel({ isAdmin = false }: Props) {
   const inventory = useWorkbookInventory(scope);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WorkbookInventoryItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [detailsTarget, setDetailsTarget] = useState<WorkbookInventoryItem | null>(null);
 
   const workbooks = useMemo(
     () => inventory.data?.workbooks ?? [],
@@ -105,6 +113,25 @@ export function WorkbookInventoryPanel({ isAdmin = false }: Props) {
     }
   }
 
+  async function confirmDelete() {
+    if (!deleteTarget) {
+      return;
+    }
+    setActionError(null);
+    setIsDeleting(true);
+    setPendingId(deleteTarget.workbook_id);
+    try {
+      await deleteWorkbook(deleteTarget.workbook_id);
+      invalidateGovernance();
+      setDeleteTarget(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to delete workbook.");
+    } finally {
+      setIsDeleting(false);
+      setPendingId(null);
+    }
+  }
+
   return (
     <section className="overflow-hidden rounded-xl border bg-card/70 shadow-sm backdrop-blur">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-gradient-to-r from-primary/10 via-accent/10 to-transparent px-4 py-3">
@@ -113,9 +140,9 @@ export function WorkbookInventoryPanel({ isAdmin = false }: Props) {
             <Database className="size-4" />
           </span>
           <div>
-            <h2 className="text-sm font-semibold">Workbook inventory</h2>
+            <h2 className="text-sm font-semibold">Workbook manager</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Actual uploaded workbooks contributing to operational reporting.
+              Uploaded workbooks feeding operational reporting.
             </p>
           </div>
         </div>
@@ -152,7 +179,7 @@ export function WorkbookInventoryPanel({ isAdmin = false }: Props) {
             aria-label="Refresh inventory"
             disabled={inventory.isFetching}
             onClick={() => inventory.refetch()}
-            size="icon"
+            size="icon-sm"
             variant="ghost"
           >
             <RefreshCw className={cn("size-4", inventory.isFetching && "animate-spin")} />
@@ -187,41 +214,72 @@ export function WorkbookInventoryPanel({ isAdmin = false }: Props) {
             </p>
           </div>
         ) : (
-          <div className="grid gap-2">
-            {workbooks.map((workbook) => (
-              <WorkbookInventoryRow
-                isAdmin={isAdmin}
-                key={workbook.workbook_id}
-                onActivate={() =>
-                  runAction(workbook.workbook_id, () => activateWorkbook(workbook.workbook_id))
-                }
-                onArchive={() =>
-                  runAction(
-                    workbook.workbook_id,
-                    () => archiveWorkbook(workbook.workbook_id),
-                    `Archive "${workbook.filename}"? It will be excluded from all reporting.`,
-                  )
-                }
-                onDeactivate={() =>
-                  runAction(workbook.workbook_id, () => deactivateWorkbook(workbook.workbook_id))
-                }
-                onDelete={() =>
-                  runAction(
-                    workbook.workbook_id,
-                    () => deleteWorkbook(workbook.workbook_id),
-                    `Delete "${workbook.filename}"? This soft-deletes the workbook and its operational facts. Audit history is preserved.`,
-                  )
-                }
-                onRestore={() =>
-                  runAction(workbook.workbook_id, () => restoreWorkbook(workbook.workbook_id))
-                }
-                pending={pendingId === workbook.workbook_id}
-                workbook={workbook}
-              />
-            ))}
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full min-w-[640px] text-left text-xs">
+              <thead className="bg-muted/40 text-[11px] uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Workbook</th>
+                  <th className="px-3 py-2 font-medium">Report Date</th>
+                  <th className="px-3 py-2 font-medium">Uploaded</th>
+                  <th className="px-3 py-2 text-right font-medium">Fact Count</th>
+                  <th className="px-3 py-2 font-medium">Status</th>
+                  <th className="px-3 py-2 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {workbooks.map((workbook) => (
+                  <WorkbookInventoryRow
+                    isAdmin={isAdmin}
+                    key={workbook.workbook_id}
+                    onActivate={() =>
+                      runAction(workbook.workbook_id, () =>
+                        activateWorkbook(workbook.workbook_id),
+                      )
+                    }
+                    onArchive={() =>
+                      runAction(
+                        workbook.workbook_id,
+                        () => archiveWorkbook(workbook.workbook_id),
+                        `Archive "${workbook.filename}"? It will be excluded from all reporting.`,
+                      )
+                    }
+                    onDeactivate={() =>
+                      runAction(workbook.workbook_id, () =>
+                        deactivateWorkbook(workbook.workbook_id),
+                      )
+                    }
+                    onDelete={() => setDeleteTarget(workbook)}
+                    onRestore={() =>
+                      runAction(workbook.workbook_id, () =>
+                        restoreWorkbook(workbook.workbook_id),
+                      )
+                    }
+                    onViewDetails={() => setDetailsTarget(workbook)}
+                    pending={pendingId === workbook.workbook_id}
+                    workbook={workbook}
+                  />
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
+
+      <WorkbookDeleteModal
+        filename={deleteTarget?.filename ?? null}
+        isDeleting={isDeleting}
+        onCancel={() => {
+          if (!isDeleting) {
+            setDeleteTarget(null);
+          }
+        }}
+        onConfirm={confirmDelete}
+      />
+
+      <WorkbookDetailsModal
+        onClose={() => setDetailsTarget(null)}
+        workbook={detailsTarget}
+      />
     </section>
   );
 }
@@ -235,6 +293,7 @@ function WorkbookInventoryRow({
   onArchive,
   onRestore,
   onDelete,
+  onViewDetails,
 }: {
   workbook: WorkbookInventoryItem;
   pending: boolean;
@@ -244,96 +303,100 @@ function WorkbookInventoryRow({
   onArchive: () => void;
   onRestore: () => void;
   onDelete: () => void;
+  onViewDetails: () => void;
 }) {
   const isArchived = Boolean(workbook.archived_at);
   const isActive = workbook.is_active_workbook && !isArchived;
 
   return (
-    <div
-      className={cn(
-        "grid grid-cols-1 gap-3 rounded-lg border bg-background/55 p-3 transition hover:border-primary/40 hover:bg-background/80 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center",
-        isArchived && "opacity-70",
-      )}
-    >
-      <div className="flex min-w-0 items-start gap-3">
-        <span
-          className={cn(
-            "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg border",
-            isActive
-              ? "border-emerald-300/50 bg-emerald-100/40 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-900/20 dark:text-emerald-300"
-              : "bg-muted/50 text-muted-foreground",
-          )}
-        >
-          <FileSpreadsheet className="size-4" />
-        </span>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate text-sm font-medium text-foreground">
-              {workbook.filename}
-            </span>
-            <StatusBadge isActive={isActive} isArchived={isArchived} />
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-            <span>
-              Report date:{" "}
-              <span className="font-medium text-foreground">
-                {workbook.report_date ?? "—"}
-              </span>
-            </span>
-            <span>Uploaded: {formatDateTime(workbook.uploaded_at)}</span>
-            {workbook.report_type_name && <span>Type: {workbook.report_type_name}</span>}
-            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">
-              {formatNumber(workbook.operational_fact_count)} facts
-            </span>
-          </div>
+    <tr className={cn("bg-background/40 transition hover:bg-background/70", isArchived && "opacity-70")}>
+      <td className="px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              "flex size-7 shrink-0 items-center justify-center rounded-md border",
+              isActive
+                ? "border-emerald-300/50 bg-emerald-100/40 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-900/20 dark:text-emerald-300"
+                : "bg-muted/50 text-muted-foreground",
+            )}
+          >
+            <FileSpreadsheet className="size-3.5" />
+          </span>
+          <span className="truncate font-medium text-foreground" title={workbook.filename}>
+            {workbook.filename}
+          </span>
         </div>
-      </div>
-
-      <div className="flex items-center justify-end gap-1.5">
-        {pending && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
-        {isArchived ? (
-          <Button disabled={pending} onClick={onRestore} variant="outline">
-            <ArchiveRestore className="size-4" />
-            Restore
-          </Button>
-        ) : isActive ? (
-          <Button disabled={pending} onClick={onDeactivate} variant="outline">
-            <PauseCircle className="size-4" />
-            Deactivate
-          </Button>
-        ) : (
-          <Button disabled={pending} onClick={onActivate} variant="outline">
-            <PlayCircle className="size-4" />
-            Activate
-          </Button>
-        )}
-        {!isArchived && (
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-foreground">
+        {workbook.report_date ?? "—"}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">
+        {formatDateTime(workbook.uploaded_at)}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-right">
+        <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 font-medium tabular-nums text-primary">
+          {formatNumber(workbook.operational_fact_count)}
+        </span>
+      </td>
+      <td className="whitespace-nowrap px-3 py-2">
+        <StatusBadge isActive={isActive} isArchived={isArchived} />
+      </td>
+      <td className="px-3 py-2">
+        <div className="flex items-center justify-end gap-1">
+          {pending && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+          {isArchived ? (
+            <Button disabled={pending} onClick={onRestore} size="sm" variant="outline">
+              <ArchiveRestore className="size-3.5" />
+              Restore
+            </Button>
+          ) : isActive ? (
+            <Button disabled={pending} onClick={onDeactivate} size="sm" variant="outline">
+              <PauseCircle className="size-3.5" />
+              Deactivate
+            </Button>
+          ) : (
+            <Button disabled={pending} onClick={onActivate} size="sm" variant="outline">
+              <PlayCircle className="size-3.5" />
+              Activate
+            </Button>
+          )}
           <Button
-            aria-label="Archive workbook"
-            disabled={pending}
-            onClick={onArchive}
-            size="icon"
-            title="Archive workbook"
+            aria-label="View workbook details"
+            onClick={onViewDetails}
+            size="icon-sm"
+            title="View details"
             variant="ghost"
           >
-            <Archive className="size-4" />
+            <Eye className="size-3.5" />
           </Button>
-        )}
-        {isAdmin && (
-          <Button
-            aria-label="Delete workbook"
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-            disabled={pending}
-            onClick={onDelete}
-            size="icon"
-            title="Delete workbook (admin)"
-            variant="ghost"
-          >
-            <Trash2 className="size-4" />
-          </Button>
-        )}
-      </div>
-    </div>
+          {!isArchived && (
+            <Button
+              aria-label="Archive workbook"
+              disabled={pending}
+              onClick={onArchive}
+              size="icon-sm"
+              title="Archive workbook"
+              variant="ghost"
+            >
+              <Archive className="size-3.5" />
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              aria-label="Delete workbook"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              disabled={pending}
+              onClick={onDelete}
+              size="icon-sm"
+              title="Delete workbook permanently (admin)"
+              variant="ghost"
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }
 

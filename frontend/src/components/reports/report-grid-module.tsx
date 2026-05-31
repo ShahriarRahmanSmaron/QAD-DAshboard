@@ -4,6 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, RefreshCw, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { ReportGrid } from "@/components/reports/report-grid";
+import { ActiveSourcesCard } from "@/components/reports/active-sources-card";
+import { WorkbookInventoryPanel } from "@/components/reports/workbook-inventory-panel";
 import { WorkbookUploadPanel } from "@/components/reports/workbook-upload-panel";
 import { Button } from "@/components/ui/button";
 import {
@@ -202,7 +204,7 @@ function buildCreateReportPayload({
   };
 }
 
-export function ReportGridModule() {
+export function ReportGridModule({ isAdmin = false }: { isAdmin?: boolean }) {
   const queryClient = useQueryClient();
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -642,6 +644,10 @@ export function ReportGridModule() {
 
       <div className="min-w-0 space-y-4">
         <WorkbookUploadPanel />
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+          <WorkbookInventoryPanel isAdmin={isAdmin} />
+          <ActiveSourcesCard />
+        </div>
         <ReportGrid
           isWorkflowTransitioning={isWorkflowTransitioning}
           isLoading={reportQuery.isFetching}

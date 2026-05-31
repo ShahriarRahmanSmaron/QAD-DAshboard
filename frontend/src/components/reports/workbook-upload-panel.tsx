@@ -1154,6 +1154,7 @@ export function WorkbookUploadPanel() {
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [result, setResult] = useState<WorkbookUploadResponse | null>(null);
   const [selectedSheetName, setSelectedSheetName] = useState("");
   const [workbookEdits, setWorkbookEdits] = useState<Record<string, WorkbookSheetEditMap>>({});
@@ -1400,6 +1401,7 @@ export function WorkbookUploadPanel() {
     }
 
     setError(null);
+    setNotice(null);
     setExportError(null);
     setExportStatus(null);
     setResult(null);
@@ -1413,6 +1415,7 @@ export function WorkbookUploadPanel() {
     try {
       const response = await uploadWorkbook(file, setProgress);
       applyUploadResult(response);
+      setNotice(`Workbook "${response.original_filename}" uploaded successfully.`);
     } catch (uploadError) {
       if (uploadError instanceof DuplicateWorkbookError) {
         // MD07-3 Phase 3: hold the file and prompt the user to replace/cancel.
@@ -1446,6 +1449,7 @@ export function WorkbookUploadPanel() {
     }
     setIsReplacing(true);
     setError(null);
+    setNotice(null);
     setProgress(4);
     setIsUploading(true);
     try {
@@ -1453,6 +1457,9 @@ export function WorkbookUploadPanel() {
       applyUploadResult(response);
       setDuplicateInfo(null);
       pendingFileRef.current = null;
+      // MD07-4 Phase 6: confirm the replacement so the user knows the old
+      // workbook is now inactive and the new one is feeding reporting.
+      setNotice("Workbook replaced successfully.");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Workbook upload failed.");
       setDuplicateInfo(null);
@@ -1647,6 +1654,7 @@ export function WorkbookUploadPanel() {
                   setWorkbookEdits({});
                   setExportError(null);
                   setExportStatus(null);
+                  setNotice(null);
                   setShowDiagnostics(false);
                   setShowRegionOverlay(false);
                   setShowSemanticPanel(false);
@@ -1746,6 +1754,21 @@ export function WorkbookUploadPanel() {
               transition={{ duration: 0.2 }}
             >
               {error}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {notice && !error && (
+            <motion.div
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-center gap-2 rounded-md border border-emerald-300/40 bg-emerald-100/40 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-900/20 dark:text-emerald-200"
+              exit={{ opacity: 0, y: -4 }}
+              initial={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.2 }}
+            >
+              <ShieldCheck className="size-4 shrink-0" />
+              {notice}
             </motion.div>
           )}
         </AnimatePresence>

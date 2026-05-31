@@ -76,18 +76,15 @@ ReportWriterDep = Annotated[AuthUser, Depends(require_role([UserRole.ADMIN, User
 ReportAdminDep = Annotated[AuthUser, Depends(require_role([UserRole.ADMIN]))]
 
 
-def _active_source_report_date(metadata: object) -> date | None:
-    """Read the persisted semantic report_date from workbook metadata."""
-    if not isinstance(metadata, dict):
-        return None
-    semantic_mapping = metadata.get("semantic_mapping")
-    if isinstance(semantic_mapping, dict):
-        value = semantic_mapping.get("report_date")
-        if isinstance(value, str) and value:
-            try:
-                return date.fromisoformat(value)
-            except ValueError:
-                return None
+def _active_source_report_date(value: object) -> date | None:
+    """Parse the report_date text the query extracted from workbook metadata."""
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
     return None
 
 
@@ -670,18 +667,6 @@ async def bulk_save(
     return serialize_report(loaded)
 
 
-@router.get("/{report_id}", response_model=ReportResponse)
-async def get_report(
-    report_id: UUID,
-    session: SessionDep,
-    user: ReportReaderDep,
-) -> ReportResponse:
-    report = await repository.get_accessible_report(session, report_id=report_id, user=user)
-    if report is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
-    return serialize_report(report)
-
-
 @router.post("/{report_id}/workflow/{workflow_action}", response_model=ReportResponse)
 async def transition_report(
     report_id: UUID,
@@ -758,7 +743,7 @@ async def get_active_workbook_sources(
             ActiveWorkbookSource(
                 workbook_id=row["workbook_id"],
                 filename=row["filename"],
-                report_date=_active_source_report_date(row.get("metadata")),
+                report_date=_active_source_report_date(row.get("report_date_text")),
                 uploaded_at=row["uploaded_at"],
                 operational_fact_count=int(row.get("operational_fact_count") or 0),
             )
@@ -984,3 +969,20 @@ async def post_report_metric(
         raise
 
     return serialize_metric(metric)
+
+
+# NOTE: This bare ``/{report_id}`` GET is intentionally registered LAST.
+# Starlette matches routes in registration order, so it must come after every
+# concrete ``/...`` collection route (e.g. ``/workbooks``, ``/summaries``,
+# ``/operations/*``). Otherwise a request like ``GET /reports/workbooks`` would
+# match ``/{report_id}`` and fail UUID validation with a 422 (MD07-4 fix).
+@router.get("/{report_id}", response_model=ReportResponse)
+async def get_report(
+    report_id: UUID,
+    session: SessionDep,
+    user: ReportReaderDep,
+) -> ReportResponse:
+    report = await repository.get_accessible_report(session, report_id=report_id, user=user)
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+    return serialize_report(report)

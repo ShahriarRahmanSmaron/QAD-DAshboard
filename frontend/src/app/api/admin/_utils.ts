@@ -24,8 +24,20 @@ export async function getAdminHeaders() {
 
 export async function proxyBackendResponse(response: Response) {
   const text = await response.text();
-  const body = text ? JSON.parse(text) : { ok: response.ok };
-  return NextResponse.json(body, { status: response.status });
+  if (!text) {
+    return NextResponse.json({ ok: response.ok }, { status: response.status });
+  }
+  try {
+    return NextResponse.json(JSON.parse(text), { status: response.status });
+  } catch {
+    // Backend returned a non-JSON body (e.g. a plain "Internal Server Error"
+    // or a gateway timeout page). Surface it as a structured error instead of
+    // throwing a JSON parse error that masks the real status.
+    return NextResponse.json(
+      { detail: text.slice(0, 500) },
+      { status: response.status },
+    );
+  }
 }
 
 export async function getBackendError(response: Response) {

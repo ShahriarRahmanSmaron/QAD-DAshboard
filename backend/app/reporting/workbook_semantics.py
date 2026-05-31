@@ -50,6 +50,33 @@ JsonObject = dict[str, Any]
 CellKey = tuple[int, int]
 CoercedValue = tuple[str, Decimal | None, str | None, date | None, bool | None]
 
+# Storage capacity guard. ``operational_facts.value_numeric`` is Numeric(30, 4),
+# whose maximum absolute magnitude is < 10^26. A value larger than the column
+# can hold would raise NumericValueOutOfRangeError at INSERT time and abort the
+# entire workbook upload. Real workbooks occasionally contain pathological
+# derived values (e.g. a divide-by-near-zero formula). We clamp the stored
+# numeric to the column's safe range so a single bad cell can never fail an
+# upload; the original formula text is preserved on the fact for traceability.
+_MAX_NUMERIC_MAGNITUDE = Decimal("9.9999e25")
+
+
+def _clamp_numeric(value: Decimal | None) -> Decimal | None:
+    """Bound a numeric value to the value_numeric column's storable range.
+
+    Non-finite values (NaN / Infinity) and values exceeding the column
+    capacity are coerced to the nearest representable magnitude so persistence
+    can never overflow. Returns ``None`` unchanged.
+    """
+    if value is None:
+        return None
+    if not value.is_finite():
+        return None
+    if value > _MAX_NUMERIC_MAGNITUDE:
+        return _MAX_NUMERIC_MAGNITUDE
+    if value < -_MAX_NUMERIC_MAGNITUDE:
+        return -_MAX_NUMERIC_MAGNITUDE
+    return value
+
 
 @dataclass(frozen=True)
 class SemanticFact:
@@ -211,7 +238,11 @@ def _coerce_value(value: Any, formula: str | None) -> CoercedValue:
     if isinstance(value, bool):
         return ("boolean", None, None, None, value)
     if isinstance(value, int | float | Decimal):
-        return ("number", Decimal(str(value)), None, None, None)
+        try:
+            numeric = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return ("text", None, str(value), None, None)
+        return ("number", _clamp_numeric(numeric), None, None, None)
     if isinstance(value, datetime):
         return ("date", None, None, value.date(), None)
     if isinstance(value, date):
@@ -225,7 +256,7 @@ def _coerce_value(value: Any, formula: str | None) -> CoercedValue:
         return ("date", None, None, parsed_date, None)
     parsed_decimal = _parse_decimal(text_value)
     if parsed_decimal is not None:
-        return ("number", parsed_decimal, None, None, None)
+        return ("number", _clamp_numeric(parsed_decimal), None, None, None)
     return ("text", None, text_value, None, None)
 
 
@@ -478,7 +509,7 @@ def _extract_sheet_semantics(
                 evaluated = value_numeric
             if evaluated is not None:
                 value_type = "number"
-                value_numeric = evaluated
+                value_numeric = _clamp_numeric(evaluated)
                 value_text = None
                 value_date = None
                 value_boolean = None

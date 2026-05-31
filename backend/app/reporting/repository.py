@@ -244,6 +244,20 @@ def _operational_fact_count_subquery() -> Any:
     )
 
 
+def _workbook_report_date_expr() -> Any:
+    """SQL expression for a workbook's semantic report_date.
+
+    Reads only ``metadata -> 'semantic_mapping' ->> 'report_date'`` instead of
+    transferring the entire workbook metadata JSONB (which can be megabytes per
+    workbook). Selecting the whole blob for every inventory row was the cause
+    of multi-second / multi-minute governance queries over the connection
+    pooler.
+    """
+    return UploadedFile.metadata_["semantic_mapping"]["report_date"].astext.label(
+        "report_date_text"
+    )
+
+
 async def list_workbook_inventory(
     session: AsyncSession,
     *,
@@ -301,7 +315,7 @@ async def list_workbook_inventory(
             UploadedFile.archived_at,
             UploadedFile.file_size_bytes,
             UploadedFile.created_at.label("uploaded_at"),
-            UploadedFile.metadata_.label("metadata"),
+            _workbook_report_date_expr(),
             fact_count_sq,
         )
         .select_from(UploadedFile)
@@ -339,7 +353,7 @@ async def get_workbook_inventory_item(
             UploadedFile.archived_at,
             UploadedFile.file_size_bytes,
             UploadedFile.created_at.label("uploaded_at"),
-            UploadedFile.metadata_.label("metadata"),
+            _workbook_report_date_expr(),
             fact_count_sq,
         )
         .select_from(UploadedFile)
@@ -425,7 +439,7 @@ async def list_active_workbook_sources(
             UploadedFile.id.label("workbook_id"),
             UploadedFile.original_filename.label("filename"),
             UploadedFile.created_at.label("uploaded_at"),
-            UploadedFile.metadata_.label("metadata"),
+            _workbook_report_date_expr(),
             fact_count_sq,
         )
         .select_from(UploadedFile)
@@ -447,30 +461,44 @@ async def list_active_workbook_sources(
     return sources, active_workbook_count, total_facts, latest_upload
 
 
-async def soft_delete_workbook_facts(
+async def hard_delete_workbook_facts(
     session: AsyncSession,
     *,
     uploaded_file_id: UUID,
-    actor_id: UUID,
 ) -> int:
-    """Soft-delete all operational facts for a workbook (Phase 5 delete).
+    """Permanently delete every operational fact for a workbook (Phase 5).
 
-    Returns the number of facts marked deleted. Maintains audit history by
-    never hard-deleting rows.
+    Returns the number of rows removed. Used by the admin hard-delete flow so
+    the workbook's facts disappear from the database entirely — no soft-delete
+    tombstones remain. The companion :func:`hard_delete_uploaded_file` removes
+    the workbook record itself.
     """
-    from datetime import UTC, datetime
-
-    from sqlalchemy import update
     from sqlalchemy.engine import CursorResult
 
-    now = datetime.now(UTC)
     result = await session.execute(
-        update(OperationalFact)
-        .where(
+        delete(OperationalFact).where(
             OperationalFact.uploaded_file_id == uploaded_file_id,
-            OperationalFact.deleted_at.is_(None),
         )
-        .values(deleted_at=now, deleted_by_user_id=actor_id)
+    )
+    rowcount = getattr(cast("CursorResult[Any]", result), "rowcount", 0)
+    return int(rowcount or 0)
+
+
+async def hard_delete_uploaded_file(
+    session: AsyncSession,
+    *,
+    uploaded_file_id: UUID,
+) -> int:
+    """Permanently delete the ``uploaded_files`` row for a workbook (Phase 5).
+
+    Reports that referenced this workbook keep their data; their
+    ``source_file_id`` is cleared by the database FK (``ON DELETE SET NULL``).
+    Returns the number of rows removed (0 or 1).
+    """
+    from sqlalchemy.engine import CursorResult
+
+    result = await session.execute(
+        delete(UploadedFile).where(UploadedFile.id == uploaded_file_id)
     )
     rowcount = getattr(cast("CursorResult[Any]", result), "rowcount", 0)
     return int(rowcount or 0)

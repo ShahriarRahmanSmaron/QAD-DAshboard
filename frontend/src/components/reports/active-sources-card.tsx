@@ -79,31 +79,39 @@ export function ActiveSourcesCard() {
             No active workbooks are contributing operational facts.
           </div>
         ) : (
-          <ul className="grid gap-1.5">
-            {sources.map((source) => (
-              <li
-                className="flex items-center justify-between gap-3 rounded-lg border bg-background/55 px-3 py-2"
-                key={source.workbook_id}
-              >
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-emerald-300/50 bg-emerald-100/40 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-900/20 dark:text-emerald-300">
-                    <FileSpreadsheet className="size-3.5" />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-medium text-foreground">
-                      {source.filename}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {source.report_date ?? "—"}
+          <div className="grid gap-2">
+            <ul className="grid max-h-72 gap-1.5 overflow-y-auto pr-1">
+              {sources.map((source) => (
+                <li
+                  className="flex items-center justify-between gap-3 rounded-lg border bg-background/55 px-3 py-2"
+                  key={source.workbook_id}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-emerald-300/50 bg-emerald-100/40 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-900/20 dark:text-emerald-300">
+                      <FileSpreadsheet className="size-3.5" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-foreground" title={source.filename}>
+                        {source.filename}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+                        <span>{source.report_date ?? "—"}</span>
+                        <span className="opacity-60">·</span>
+                        <span>{formatDateTime(source.uploaded_at)}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium tabular-nums text-primary">
-                  {formatNumber(source.operational_fact_count)} facts
-                </span>
-              </li>
-            ))}
-          </ul>
+                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium tabular-nums text-primary">
+                    {formatNumber(source.operational_fact_count)} facts
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-center text-[11px] text-muted-foreground">
+              {sources.length} active {sources.length === 1 ? "workbook" : "workbooks"} feeding
+              operational reporting
+            </p>
+          </div>
         )}
       </div>
     </section>
