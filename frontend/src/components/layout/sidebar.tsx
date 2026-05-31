@@ -6,6 +6,7 @@ import type { ComponentType } from "react";
 import {
   ClipboardCheck,
   Database,
+  FileSpreadsheet,
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
@@ -27,6 +28,12 @@ const navigation = [
     label: "Report Grid",
     href: "/reports/grid",
     icon: ClipboardCheck,
+    roles: ["admin", "editor", "viewer"],
+  },
+  {
+    label: "Workbooks",
+    href: "/reports/workbooks",
+    icon: FileSpreadsheet,
     roles: ["admin", "editor", "viewer"],
   },
   {

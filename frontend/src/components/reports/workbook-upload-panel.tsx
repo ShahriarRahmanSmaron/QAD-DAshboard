@@ -13,7 +13,9 @@ import { Bug, Database, Download, FileSpreadsheet, Layers3, Loader2, ShieldCheck
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SemanticDiagnosticsPanel } from "@/components/reports/semantic-diagnostics-panel";
+import { WorkbookDuplicateModal } from "@/components/reports/workbook-duplicate-modal";
 import {
+  DuplicateWorkbookError,
   exportWorkbook,
   triggerWorkbookDownload,
   uploadWorkbook,
@@ -22,6 +24,7 @@ import {
 import type {
   SemanticDiagnostics,
   WorkbookCellPreview,
+  WorkbookDuplicateInfo,
   WorkbookSemanticFact,
   WorkbookSemanticMapping,
   WorkbookSemanticRegion,
@@ -29,6 +32,7 @@ import type {
   WorkbookUploadResponse,
 } from "@/lib/reports/types";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -1145,6 +1149,7 @@ function SemanticBreakdownPanel({
 
 export function WorkbookUploadPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -1161,6 +1166,10 @@ export function WorkbookUploadPanel() {
   const [showSemanticPanel, setShowSemanticPanel] = useState(false);
   const [showSemanticOverlay, setShowSemanticOverlay] = useState(false);
   const [showVerification, setShowVerification] = useState(false);
+  // MD07-3 Phase 3: duplicate-upload guard state.
+  const [duplicateInfo, setDuplicateInfo] = useState<WorkbookDuplicateInfo | null>(null);
+  const [isReplacing, setIsReplacing] = useState(false);
+  const pendingFileRef = useRef<File | null>(null);
 
   const selectedSheet = useMemo(
     () =>
@@ -1403,16 +1412,60 @@ export function WorkbookUploadPanel() {
     setIsUploading(true);
     try {
       const response = await uploadWorkbook(file, setProgress);
-      setResult(response);
-      setSelectedSheetName(response.metadata.sheets[0]?.name ?? "");
-      setShowSemanticPanel(Boolean(response.metadata.semantic_mapping?.fact_count));
-      const health = response.metadata.semantic_mapping?.diagnostics?.health;
-      setShowVerification(health === "warning" || health === "error");
+      applyUploadResult(response);
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "Workbook upload failed.");
+      if (uploadError instanceof DuplicateWorkbookError) {
+        // MD07-3 Phase 3: hold the file and prompt the user to replace/cancel.
+        pendingFileRef.current = file;
+        setDuplicateInfo(uploadError.info);
+        setProgress(0);
+      } else {
+        setError(uploadError instanceof Error ? uploadError.message : "Workbook upload failed.");
+      }
     } finally {
       setIsUploading(false);
     }
+  }
+
+  function applyUploadResult(response: WorkbookUploadResponse) {
+    setResult(response);
+    setSelectedSheetName(response.metadata.sheets[0]?.name ?? "");
+    setShowSemanticPanel(Boolean(response.metadata.semantic_mapping?.fact_count));
+    const health = response.metadata.semantic_mapping?.diagnostics?.health;
+    setShowVerification(health === "warning" || health === "error");
+    // Keep the inventory / active-sources / operational views in sync.
+    void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
+    void queryClient.invalidateQueries({ queryKey: ["operations"] });
+  }
+
+  async function handleReplaceExisting() {
+    const file = pendingFileRef.current;
+    if (!file) {
+      setDuplicateInfo(null);
+      return;
+    }
+    setIsReplacing(true);
+    setError(null);
+    setProgress(4);
+    setIsUploading(true);
+    try {
+      const response = await uploadWorkbook(file, setProgress, { replaceExisting: true });
+      applyUploadResult(response);
+      setDuplicateInfo(null);
+      pendingFileRef.current = null;
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Workbook upload failed.");
+      setDuplicateInfo(null);
+    } finally {
+      setIsReplacing(false);
+      setIsUploading(false);
+    }
+  }
+
+  function handleCancelDuplicate() {
+    setDuplicateInfo(null);
+    pendingFileRef.current = null;
+    setProgress(0);
   }
 
   const handleWorkbookCellEdit = useCallback(
@@ -2052,6 +2105,15 @@ export function WorkbookUploadPanel() {
           )}
         </AnimatePresence>
       </div>
+
+      <WorkbookDuplicateModal
+        info={duplicateInfo}
+        isReplacing={isReplacing}
+        onCancel={handleCancelDuplicate}
+        onReplace={() => {
+          void handleReplaceExisting();
+        }}
+      />
     </section>
   );
 }

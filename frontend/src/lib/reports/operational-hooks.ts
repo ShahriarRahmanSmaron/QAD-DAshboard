@@ -2,16 +2,19 @@
 
 import { useQuery } from "@tanstack/react-query";
 import {
+  getActiveWorkbookSources,
   getOperationalAggregation,
   getOperationalComparison,
   getOperationalDimensions,
   getOperationalTrend,
   listOperationalFacts,
+  listWorkbookInventory,
   traceOperationalFact,
   type OperationalAggregationParams,
   type OperationalComparisonParams,
   type OperationalQueryParams,
   type OperationalTrendParams,
+  type WorkbookInventoryScope,
 } from "@/lib/reports/api";
 
 /**
@@ -77,6 +80,26 @@ export function useOperationalFactTrace(factId: string | null) {
     queryKey: ["operations", "trace", factId],
     queryFn: () => traceOperationalFact(factId as string),
     enabled: Boolean(factId),
+    staleTime: OPERATIONAL_STALE_TIME,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// MD07-3: Workbook governance hooks
+// ---------------------------------------------------------------------------
+
+export function useWorkbookInventory(scope: WorkbookInventoryScope = "all") {
+  return useQuery({
+    queryKey: ["workbooks", "inventory", scope],
+    queryFn: () => listWorkbookInventory(scope),
+    staleTime: OPERATIONAL_STALE_TIME,
+  });
+}
+
+export function useActiveWorkbookSources() {
+  return useQuery({
+    queryKey: ["workbooks", "active-sources"],
+    queryFn: getActiveWorkbookSources,
     staleTime: OPERATIONAL_STALE_TIME,
   });
 }

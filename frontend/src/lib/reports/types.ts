@@ -326,6 +326,7 @@ export type OperationalTrendPoint = {
   numeric_total: string | number | null;
   fact_count: number;
   numeric_count: number;
+  workbook_names?: string[];
 };
 
 export type OperationalTrendResponse = {
@@ -343,6 +344,12 @@ export type OperationalComparisonTotals = {
   numeric_count: number;
 };
 
+export type OperationalWorkbookSourceRef = {
+  workbook_id: string;
+  filename: string;
+  fact_count: number;
+};
+
 export type OperationalComparisonResponse = {
   metric_key: string;
   buyer: string | null;
@@ -355,6 +362,8 @@ export type OperationalComparisonResponse = {
   delta: string | number | null;
   delta_percent: number | null;
   direction: "up" | "down" | "flat";
+  current_sources?: OperationalWorkbookSourceRef[];
+  previous_sources?: OperationalWorkbookSourceRef[];
 };
 
 export type OperationalDimensionOption = {
@@ -842,4 +851,61 @@ export type WorkbookUploadResponse = {
   original_filename: string;
   file_size_bytes: number;
   metadata: WorkbookParsePreview;
+  replaced_workbook_id?: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// MD07-3: Workbook governance (inventory, activation, archive, active sources)
+// ---------------------------------------------------------------------------
+
+export type WorkbookInventoryItem = {
+  workbook_id: string;
+  filename: string;
+  report_type_id: string | null;
+  report_type_name: string | null;
+  report_date: string | null;
+  uploaded_at: string;
+  uploaded_by_user_id: string | null;
+  status: string;
+  is_active_workbook: boolean;
+  archived_at: string | null;
+  processed: boolean;
+  operational_fact_count: number;
+  file_size_bytes: number | null;
+};
+
+export type WorkbookInventoryResponse = {
+  workbooks: WorkbookInventoryItem[];
+  total: number;
+  active_count: number;
+  archived_count: number;
+};
+
+export type WorkbookActionResponse = {
+  workbook: WorkbookInventoryItem;
+};
+
+export type WorkbookDuplicateInfo = {
+  code: "DUPLICATE_WORKBOOK";
+  message: string;
+  existing_workbook_id: string;
+  filename: string;
+  report_date: string | null;
+  report_type_id: string | null;
+  uploaded_at: string;
+};
+
+export type ActiveWorkbookSource = {
+  workbook_id: string;
+  filename: string;
+  report_date: string | null;
+  uploaded_at: string;
+  operational_fact_count: number;
+};
+
+export type ActiveSourcesResponse = {
+  active_workbook_count: number;
+  total_operational_facts: number;
+  latest_upload_at: string | null;
+  sources: ActiveWorkbookSource[];
 };

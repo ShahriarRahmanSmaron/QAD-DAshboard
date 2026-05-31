@@ -14,6 +14,8 @@ from app.db.session import get_db_session
 from app.reporting import repository
 from app.reporting.repository import OperationalFactFilters
 from app.reporting.schemas import (
+    ActiveSourcesResponse,
+    ActiveWorkbookSource,
     BulkReportSaveRequest,
     OperationalAggregationResponse,
     OperationalComparisonResponse,
@@ -31,7 +33,9 @@ from app.reporting.schemas import (
     ReportRowResponse,
     ReportSummaryListResponse,
     SemanticDiagnosticsResponse,
+    WorkbookActionResponse,
     WorkbookExportRequest,
+    WorkbookInventoryResponse,
     WorkbookRebuildResponse,
     WorkbookSemanticBreakdownResponse,
     WorkbookSemanticDiagnosticsBundle,
@@ -39,11 +43,14 @@ from app.reporting.schemas import (
     WorkbookUploadResponse,
 )
 from app.reporting.service import (
+    archive_workbook,
     bulk_save_report,
     create_report,
     create_report_metric,
     create_report_row,
+    delete_workbook,
     rebuild_operational_facts,
+    restore_workbook,
     serialize_metric,
     serialize_operational_aggregation,
     serialize_operational_comparison,
@@ -55,6 +62,8 @@ from app.reporting.service import (
     serialize_report,
     serialize_report_summary,
     serialize_row,
+    serialize_workbook_inventory_item,
+    set_workbook_active_state,
     transition_report_workflow,
 )
 from app.reporting.workbook_export import export_workbook_for_user
@@ -64,6 +73,22 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 ReportReaderDep = Annotated[AuthUser, Depends(require_permission(Permission.REPORTS_READ))]
 ReportWriterDep = Annotated[AuthUser, Depends(require_role([UserRole.ADMIN, UserRole.EDITOR]))]
+ReportAdminDep = Annotated[AuthUser, Depends(require_role([UserRole.ADMIN]))]
+
+
+def _active_source_report_date(metadata: object) -> date | None:
+    """Read the persisted semantic report_date from workbook metadata."""
+    if not isinstance(metadata, dict):
+        return None
+    semantic_mapping = metadata.get("semantic_mapping")
+    if isinstance(semantic_mapping, dict):
+        value = semantic_mapping.get("report_date")
+        if isinstance(value, str) and value:
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                return None
+    return None
 
 
 @router.get("", response_model=ReportListResponse)
@@ -688,6 +713,150 @@ async def transition_report(
     return serialize_report(loaded)
 
 
+@router.get("/workbooks", response_model=WorkbookInventoryResponse)
+async def list_workbooks(
+    session: SessionDep,
+    user: ReportReaderDep,
+    scope: Annotated[str, Query(pattern="^(all|active|archived)$")] = "all",
+) -> WorkbookInventoryResponse:
+    """Workbook inventory (MD07-3 Phase 1).
+
+    Lists actual uploaded workbooks (not generated report templates) with their
+    governance state and active operational-fact counts. ``scope`` filters to
+    ``active`` (active + non-archived), ``archived``, or ``all``.
+    """
+    rows, total, active_count, archived_count = await repository.list_workbook_inventory(
+        session,
+        user=user,
+        scope=scope,
+    )
+    return WorkbookInventoryResponse(
+        workbooks=[serialize_workbook_inventory_item(row) for row in rows],
+        total=total,
+        active_count=active_count,
+        archived_count=archived_count,
+    )
+
+
+@router.get("/workbooks/active-sources", response_model=ActiveSourcesResponse)
+async def get_active_workbook_sources(
+    session: SessionDep,
+    user: ReportReaderDep,
+) -> ActiveSourcesResponse:
+    """Active operational sources dashboard card (MD07-3 Phase 6)."""
+    (
+        sources,
+        active_count,
+        total_facts,
+        latest_upload,
+    ) = await repository.list_active_workbook_sources(session, user=user)
+    return ActiveSourcesResponse(
+        active_workbook_count=active_count,
+        total_operational_facts=total_facts,
+        latest_upload_at=latest_upload,
+        sources=[
+            ActiveWorkbookSource(
+                workbook_id=row["workbook_id"],
+                filename=row["filename"],
+                report_date=_active_source_report_date(row.get("metadata")),
+                uploaded_at=row["uploaded_at"],
+                operational_fact_count=int(row.get("operational_fact_count") or 0),
+            )
+            for row in sources
+        ],
+    )
+
+
+@router.post("/workbooks/{uploaded_file_id}/activate", response_model=WorkbookActionResponse)
+async def activate_workbook(
+    uploaded_file_id: UUID,
+    session: SessionDep,
+    user: ReportWriterDep,
+) -> WorkbookActionResponse:
+    """Activate a workbook so it contributes to operational reporting (Phase 2)."""
+    try:
+        row = await set_workbook_active_state(
+            session,
+            uploaded_file_id=uploaded_file_id,
+            actor=user,
+            active=True,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return WorkbookActionResponse(workbook=serialize_workbook_inventory_item(row))
+
+
+@router.post("/workbooks/{uploaded_file_id}/deactivate", response_model=WorkbookActionResponse)
+async def deactivate_workbook(
+    uploaded_file_id: UUID,
+    session: SessionDep,
+    user: ReportWriterDep,
+) -> WorkbookActionResponse:
+    """Deactivate a workbook so it is ignored by operational reporting (Phase 2)."""
+    try:
+        row = await set_workbook_active_state(
+            session,
+            uploaded_file_id=uploaded_file_id,
+            actor=user,
+            active=False,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return WorkbookActionResponse(workbook=serialize_workbook_inventory_item(row))
+
+
+@router.post("/workbooks/{uploaded_file_id}/archive", response_model=WorkbookActionResponse)
+async def archive_workbook_endpoint(
+    uploaded_file_id: UUID,
+    session: SessionDep,
+    user: ReportWriterDep,
+) -> WorkbookActionResponse:
+    """Archive a workbook (Phase 5): stored but excluded from all reporting."""
+    try:
+        row = await archive_workbook(session, uploaded_file_id=uploaded_file_id, actor=user)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return WorkbookActionResponse(workbook=serialize_workbook_inventory_item(row))
+
+
+@router.post("/workbooks/{uploaded_file_id}/restore", response_model=WorkbookActionResponse)
+async def restore_workbook_endpoint(
+    uploaded_file_id: UUID,
+    session: SessionDep,
+    user: ReportWriterDep,
+) -> WorkbookActionResponse:
+    """Restore an archived workbook back into reporting (Phase 5)."""
+    try:
+        row = await restore_workbook(session, uploaded_file_id=uploaded_file_id, actor=user)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return WorkbookActionResponse(workbook=serialize_workbook_inventory_item(row))
+
+
+@router.delete("/workbooks/{uploaded_file_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_workbook_endpoint(
+    uploaded_file_id: UUID,
+    session: SessionDep,
+    user: ReportAdminDep,
+) -> Response:
+    """Soft-delete a workbook and its operational facts (Phase 5, admin only)."""
+    try:
+        await delete_workbook(session, uploaded_file_id=uploaded_file_id, actor=user)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post(
     "/workbooks/upload",
     response_model=WorkbookUploadResponse,
@@ -697,9 +866,15 @@ async def upload_workbook(
     session: SessionDep,
     user: ReportWriterDep,
     file: Annotated[UploadFile, File(...)],
+    replace_existing: Annotated[bool, Query()] = False,
 ) -> WorkbookUploadResponse:
     try:
-        response = await save_and_parse_workbook_upload(session, file=file, actor=user)
+        response = await save_and_parse_workbook_upload(
+            session,
+            file=file,
+            actor=user,
+            replace_existing=replace_existing,
+        )
         await session.commit()
     except Exception:
         await session.rollback()

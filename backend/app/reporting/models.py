@@ -245,6 +245,20 @@ class UploadedFile(TimestampMixin, SoftDeleteMixin, Base):
         nullable=False,
         server_default=text("'uploaded'"),
     )
+    # MD07-3: workbook governance. ``is_active_workbook`` controls whether a
+    # workbook's operational facts participate in reporting (query, aggregation,
+    # comparison, trend, dropdowns). ``archived_at`` marks a workbook as
+    # archived — stored but excluded from reporting and the active inventory.
+    is_active_workbook: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("true"),
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
     processing_error: Mapped[str | None] = mapped_column(Text)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
@@ -285,6 +299,9 @@ class UploadedFile(TimestampMixin, SoftDeleteMixin, Base):
         Index("uploaded_files_unit_id_idx", "unit_id"),
         Index("uploaded_files_status_idx", "status"),
         Index("uploaded_files_created_at_idx", "created_at"),
+        # MD07-3: workbook governance indexes.
+        Index("uploaded_files_is_active_workbook_idx", "is_active_workbook"),
+        Index("uploaded_files_archived_at_idx", "archived_at"),
     )
 
 

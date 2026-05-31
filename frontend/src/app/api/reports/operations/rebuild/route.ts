@@ -1,4 +1,3 @@
-import { NextRequest } from "next/server";
 import {
   getAdminBackendUrl,
   getAdminHeaders,
@@ -6,7 +5,7 @@ import {
   unauthorizedResponse,
 } from "@/app/api/admin/_utils";
 
-export async function POST(_request: NextRequest) {
+export async function POST() {
   const headers = await getAdminHeaders();
   if (!headers) {
     return unauthorizedResponse();

@@ -3,17 +3,25 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.schemas import AuthUser
 from app.core.config import settings
+from app.reporting import repository
 from app.reporting.models import AuditLog, UploadedFile, UploadedFileStatus
-from app.reporting.schemas import WorkbookParsePreview, WorkbookUploadResponse
+from app.reporting.schemas import (
+    WorkbookDuplicateInfo,
+    WorkbookParsePreview,
+    WorkbookUploadResponse,
+)
 from app.reporting.workbook_parser import parse_xlsx_workbook
-from app.reporting.workbook_semantics import persist_workbook_semantics
+from app.reporting.workbook_semantics import (
+    extract_workbook_report_date,
+    persist_workbook_semantics,
+)
 
 CHUNK_SIZE_BYTES = 1024 * 1024
 ALLOWED_XLSX_CONTENT_TYPES = {
@@ -56,6 +64,7 @@ async def save_and_parse_workbook_upload(
     *,
     file: UploadFile,
     actor: AuthUser,
+    replace_existing: bool = False,
 ) -> WorkbookUploadResponse:
     safe_filename = _validate_xlsx_upload(file)
     storage_root = _storage_root()
@@ -95,6 +104,54 @@ async def save_and_parse_workbook_upload(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Unable to parse XLSX workbook.",
         ) from exc
+
+    # MD07-3 Phase 3: prevent accidental duplicate uploads. Identity is
+    # (filename, report_date, report_type). When an active duplicate exists and
+    # the caller has not opted to replace it, abort with DUPLICATE_WORKBOOK so
+    # the UI can show the replace/cancel modal. The just-written temp file is
+    # removed so we never leave an orphan blob behind.
+    report_date = extract_workbook_report_date(workbook_metadata)
+    duplicate = await repository.find_active_duplicate_workbook(
+        session,
+        user=actor,
+        filename=safe_filename,
+        report_date=report_date,
+        report_type_id=None,
+    )
+    replaced_workbook_id: UUID | None = None
+    if duplicate is not None and not replace_existing:
+        storage_path.unlink(missing_ok=True)
+        info = WorkbookDuplicateInfo(
+            message="A matching active workbook already exists.",
+            existing_workbook_id=duplicate.id,
+            filename=duplicate.original_filename,
+            report_date=report_date,
+            report_type_id=duplicate.report_type_id,
+            uploaded_at=duplicate.created_at,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=info.model_dump(mode="json"),
+        )
+    if duplicate is not None and replace_existing:
+        # Deactivate the prior workbook so only one active version remains.
+        duplicate.is_active_workbook = False
+        replaced_workbook_id = duplicate.id
+        session.add(
+            AuditLog(
+                actor_id=actor.id,
+                actor_user_id=actor.id,
+                action="workbook.replaced",
+                entity_type="uploaded_file",
+                entity_id=str(duplicate.id),
+                target_type="uploaded_file",
+                target_id=duplicate.id,
+                metadata_={
+                    "original_filename": duplicate.original_filename,
+                    "reason": "duplicate_replace",
+                },
+            )
+        )
 
     checksum_sha256 = checksum.hexdigest()
     workbook_metadata = {
@@ -188,4 +245,5 @@ async def save_and_parse_workbook_upload(
         original_filename=safe_filename,
         file_size_bytes=total_bytes,
         metadata=WorkbookParsePreview.model_validate(workbook_metadata),
+        replaced_workbook_id=replaced_workbook_id,
     )

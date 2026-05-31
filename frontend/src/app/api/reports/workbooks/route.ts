@@ -6,20 +6,16 @@ import {
   unauthorizedResponse,
 } from "@/app/api/admin/_utils";
 
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
   const headers = await getAdminHeaders();
   if (!headers) {
     return unauthorizedResponse();
   }
 
   const response = await fetch(
-    getAdminBackendUrl(`/api/v1/reports/workbooks/upload${request.nextUrl.search}`),
+    getAdminBackendUrl(`/api/v1/reports/workbooks${request.nextUrl.search}`),
     {
-      method: "POST",
-      headers: {
-        Authorization: headers.Authorization,
-      },
-      body: await request.formData(),
+      headers,
       cache: "no-store",
     },
   );

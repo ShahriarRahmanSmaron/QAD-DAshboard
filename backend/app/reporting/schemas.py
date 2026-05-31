@@ -257,6 +257,78 @@ class WorkbookUploadResponse(BaseModel):
     original_filename: str
     file_size_bytes: int
     metadata: WorkbookParsePreview
+    # MD07-3: when a duplicate upload is replaced, surfaces the deactivated
+    # prior workbook so the UI can confirm the swap happened cleanly.
+    replaced_workbook_id: UUID | None = None
+
+
+# ---------------------------------------------------------------------------
+# MD07-3: Workbook governance — inventory, activation, archive, active sources
+# ---------------------------------------------------------------------------
+
+
+class WorkbookInventoryItem(BaseModel):
+    """A single uploaded workbook in the inventory view.
+
+    Represents an *actual* uploaded workbook (``uploaded_files`` row), not a
+    generated report template.
+    """
+
+    workbook_id: UUID
+    filename: str
+    report_type_id: UUID | None = None
+    report_type_name: str | None = None
+    report_date: date | None = None
+    uploaded_at: datetime
+    uploaded_by_user_id: UUID | None = None
+    status: str
+    is_active_workbook: bool
+    archived_at: datetime | None = None
+    processed: bool
+    operational_fact_count: int = 0
+    file_size_bytes: int | None = None
+
+
+class WorkbookInventoryResponse(BaseModel):
+    workbooks: list[WorkbookInventoryItem] = Field(default_factory=list)
+    total: int = 0
+    active_count: int = 0
+    archived_count: int = 0
+
+
+class WorkbookActionResponse(BaseModel):
+    """Result of an activate / deactivate / archive / delete action."""
+
+    workbook: WorkbookInventoryItem
+
+
+class WorkbookDuplicateInfo(BaseModel):
+    """Metadata returned (HTTP 409) when an active duplicate workbook exists."""
+
+    code: str = "DUPLICATE_WORKBOOK"
+    message: str
+    existing_workbook_id: UUID
+    filename: str
+    report_date: date | None = None
+    report_type_id: UUID | None = None
+    uploaded_at: datetime
+
+
+class ActiveWorkbookSource(BaseModel):
+    workbook_id: UUID
+    filename: str
+    report_date: date | None = None
+    uploaded_at: datetime
+    operational_fact_count: int = 0
+
+
+class ActiveSourcesResponse(BaseModel):
+    """Dashboard card payload: which workbooks feed operational reporting."""
+
+    active_workbook_count: int = 0
+    total_operational_facts: int = 0
+    latest_upload_at: datetime | None = None
+    sources: list[ActiveWorkbookSource] = Field(default_factory=list)
 
 
 class OperationalFactResponse(BaseModel):
@@ -364,6 +436,8 @@ class OperationalTrendPoint(BaseModel):
     numeric_total: Decimal | None = None
     fact_count: int = 0
     numeric_count: int = 0
+    # MD07-3 Phase 4: source workbook(s) feeding this trend point.
+    workbook_names: list[str] = Field(default_factory=list)
 
 
 class OperationalTrendResponse(BaseModel):
@@ -381,6 +455,14 @@ class OperationalComparisonTotals(BaseModel):
     numeric_count: int = 0
 
 
+class OperationalWorkbookSourceRef(BaseModel):
+    """A source workbook contributing to a comparison/trend value (Phase 4)."""
+
+    workbook_id: UUID
+    filename: str
+    fact_count: int = 0
+
+
 class OperationalComparisonResponse(BaseModel):
     metric_key: str
     buyer: str | None = None
@@ -393,6 +475,9 @@ class OperationalComparisonResponse(BaseModel):
     delta: Decimal | None = None
     delta_percent: float | None = None
     direction: str = "flat"
+    # MD07-3 Phase 4: where the compared values originate.
+    current_sources: list[OperationalWorkbookSourceRef] = Field(default_factory=list)
+    previous_sources: list[OperationalWorkbookSourceRef] = Field(default_factory=list)
 
 
 class OperationalDimensionOption(BaseModel):

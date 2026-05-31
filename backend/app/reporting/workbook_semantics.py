@@ -790,6 +790,25 @@ def _summary_rows(facts: list[SemanticFact]) -> list[JsonObject]:
     return list(grouped.values())
 
 
+def extract_workbook_report_date(workbook_metadata: JsonObject) -> date | None:
+    """Resolve the workbook-level report date from parsed metadata (MD07-3).
+
+    Used by the duplicate-upload guard *before* semantic facts are persisted.
+    Mirrors the detection used during extraction: scan all cells for a labeled
+    or inferred date, falling back to the filename. Returns ``None`` when no
+    date can be determined.
+    """
+    filename = str(workbook_metadata.get("filename") or "")
+    all_cells: dict[CellKey, JsonObject] = {}
+    for sheet in workbook_metadata.get("sheets", []):
+        if not isinstance(sheet, dict):
+            continue
+        for key, cell in _sheet_cell_map(sheet).items():
+            all_cells.setdefault(key, cell)
+    report_date, _confidence = _extract_report_date(all_cells, filename)
+    return report_date
+
+
 def extract_workbook_semantics(
     workbook_metadata: JsonObject,
     *,

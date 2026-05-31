@@ -1,7 +1,7 @@
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import Select, delete, func, or_, select, true
@@ -225,6 +225,257 @@ async def list_accessible_uploaded_files(
     return list(result.scalars().all())
 
 
+# ---------------------------------------------------------------------------
+# MD07-3: Workbook governance — inventory, activation, archive, active sources
+# ---------------------------------------------------------------------------
+
+
+def _operational_fact_count_subquery() -> Any:
+    """Correlated count of active operational facts per uploaded workbook."""
+    return (
+        select(func.count(OperationalFact.id))
+        .where(
+            OperationalFact.uploaded_file_id == UploadedFile.id,
+            OperationalFact.deleted_at.is_(None),
+            OperationalFact.is_active.is_(True),
+        )
+        .correlate(UploadedFile)
+        .scalar_subquery()
+    )
+
+
+async def list_workbook_inventory(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+    scope: str = "all",
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    """Return the workbook inventory (actual uploaded workbooks).
+
+    ``scope`` selects ``active`` (active, non-archived), ``archived``, or
+    ``all``. Returns the rows plus total / active / archived counts so the UI
+    can render tab badges without extra round-trips.
+    """
+    fact_count_sq = _operational_fact_count_subquery().label("operational_fact_count")
+
+    base_filters = [
+        UploadedFile.deleted_at.is_(None),
+        _uploaded_file_access_filter(user),
+    ]
+
+    # Aggregate counts across the full accessible set in one round-trip.
+    counts_result = await session.execute(
+        select(
+            func.count().label("total"),
+            func.count()
+            .filter(
+                UploadedFile.is_active_workbook.is_(True),
+                UploadedFile.archived_at.is_(None),
+            )
+            .label("active_count"),
+            func.count()
+            .filter(UploadedFile.archived_at.is_not(None))
+            .label("archived_count"),
+        )
+        .select_from(UploadedFile)
+        .where(*base_filters)
+    )
+    counts = counts_result.one()._mapping
+
+    scope_filters = list(base_filters)
+    if scope == "active":
+        scope_filters.append(UploadedFile.is_active_workbook.is_(True))
+        scope_filters.append(UploadedFile.archived_at.is_(None))
+    elif scope == "archived":
+        scope_filters.append(UploadedFile.archived_at.is_not(None))
+
+    stmt = (
+        select(
+            UploadedFile.id.label("workbook_id"),
+            UploadedFile.original_filename.label("filename"),
+            UploadedFile.report_type_id,
+            ReportType.name.label("report_type_name"),
+            UploadedFile.uploaded_by_user_id,
+            UploadedFile.status,
+            UploadedFile.is_active_workbook,
+            UploadedFile.archived_at,
+            UploadedFile.file_size_bytes,
+            UploadedFile.created_at.label("uploaded_at"),
+            UploadedFile.metadata_.label("metadata"),
+            fact_count_sq,
+        )
+        .select_from(UploadedFile)
+        .join(ReportType, ReportType.id == UploadedFile.report_type_id, isouter=True)
+        .where(*scope_filters)
+        .order_by(UploadedFile.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    rows = [dict(row._mapping) for row in result.all()]
+    return (
+        rows,
+        int(counts["total"]),
+        int(counts["active_count"]),
+        int(counts["archived_count"]),
+    )
+
+
+async def get_workbook_inventory_item(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+    uploaded_file_id: UUID,
+) -> dict[str, Any] | None:
+    """Return a single workbook inventory row (post-action serialization)."""
+    fact_count_sq = _operational_fact_count_subquery().label("operational_fact_count")
+    stmt = (
+        select(
+            UploadedFile.id.label("workbook_id"),
+            UploadedFile.original_filename.label("filename"),
+            UploadedFile.report_type_id,
+            ReportType.name.label("report_type_name"),
+            UploadedFile.uploaded_by_user_id,
+            UploadedFile.status,
+            UploadedFile.is_active_workbook,
+            UploadedFile.archived_at,
+            UploadedFile.file_size_bytes,
+            UploadedFile.created_at.label("uploaded_at"),
+            UploadedFile.metadata_.label("metadata"),
+            fact_count_sq,
+        )
+        .select_from(UploadedFile)
+        .join(ReportType, ReportType.id == UploadedFile.report_type_id, isouter=True)
+        .where(
+            UploadedFile.id == uploaded_file_id,
+            UploadedFile.deleted_at.is_(None),
+            _uploaded_file_access_filter(user),
+        )
+    )
+    result = await session.execute(stmt)
+    row = result.one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def find_active_duplicate_workbook(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+    filename: str,
+    report_date: date | None,
+    report_type_id: UUID | None,
+) -> UploadedFile | None:
+    """Find an active, non-archived workbook with the same identity.
+
+    Identity is ``(filename, report_date, report_type)`` per MD07-3 Phase 3.
+    ``report_date`` is read from the workbook's persisted semantic mapping
+    metadata, and ``report_type`` from the column (both may be null for older
+    uploads, in which case only the matching nullity is treated as equal).
+    """
+    clauses: list[ColumnElement[bool]] = [
+        UploadedFile.deleted_at.is_(None),
+        UploadedFile.is_active_workbook.is_(True),
+        UploadedFile.archived_at.is_(None),
+        func.lower(UploadedFile.original_filename) == filename.strip().lower(),
+        _uploaded_file_access_filter(user),
+    ]
+    if report_type_id is None:
+        clauses.append(UploadedFile.report_type_id.is_(None))
+    else:
+        clauses.append(UploadedFile.report_type_id == report_type_id)
+
+    result = await session.execute(
+        select(UploadedFile)
+        .where(*clauses)
+        .order_by(UploadedFile.created_at.desc())
+    )
+    candidates = list(result.scalars().all())
+    if not candidates:
+        return None
+
+    target_iso = report_date.isoformat() if report_date is not None else None
+    for candidate in candidates:
+        if _workbook_report_date_iso(candidate) == target_iso:
+            return candidate
+    return None
+
+
+def _workbook_report_date_iso(uploaded_file: UploadedFile) -> str | None:
+    metadata = uploaded_file.metadata_ if isinstance(uploaded_file.metadata_, dict) else {}
+    semantic_mapping = metadata.get("semantic_mapping")
+    if isinstance(semantic_mapping, dict):
+        value = semantic_mapping.get("report_date")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+async def list_active_workbook_sources(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+) -> tuple[list[dict[str, Any]], int, int, Any]:
+    """Return active operational sources for the dashboard card (Phase 6).
+
+    Returns ``(sources, active_workbook_count, total_operational_facts,
+    latest_upload_at)``. Only active, non-archived, processed workbooks that
+    actually carry operational facts are surfaced.
+    """
+    fact_count_sq = _operational_fact_count_subquery().label("operational_fact_count")
+    stmt = (
+        select(
+            UploadedFile.id.label("workbook_id"),
+            UploadedFile.original_filename.label("filename"),
+            UploadedFile.created_at.label("uploaded_at"),
+            UploadedFile.metadata_.label("metadata"),
+            fact_count_sq,
+        )
+        .select_from(UploadedFile)
+        .where(
+            UploadedFile.deleted_at.is_(None),
+            UploadedFile.is_active_workbook.is_(True),
+            UploadedFile.archived_at.is_(None),
+            _uploaded_file_access_filter(user),
+        )
+        .order_by(UploadedFile.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    rows = [dict(row._mapping) for row in result.all()]
+
+    sources = [row for row in rows if int(row.get("operational_fact_count") or 0) > 0]
+    active_workbook_count = len(sources)
+    total_facts = sum(int(row.get("operational_fact_count") or 0) for row in sources)
+    latest_upload = max((row["uploaded_at"] for row in sources), default=None)
+    return sources, active_workbook_count, total_facts, latest_upload
+
+
+async def soft_delete_workbook_facts(
+    session: AsyncSession,
+    *,
+    uploaded_file_id: UUID,
+    actor_id: UUID,
+) -> int:
+    """Soft-delete all operational facts for a workbook (Phase 5 delete).
+
+    Returns the number of facts marked deleted. Maintains audit history by
+    never hard-deleting rows.
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+    from sqlalchemy.engine import CursorResult
+
+    now = datetime.now(UTC)
+    result = await session.execute(
+        update(OperationalFact)
+        .where(
+            OperationalFact.uploaded_file_id == uploaded_file_id,
+            OperationalFact.deleted_at.is_(None),
+        )
+        .values(deleted_at=now, deleted_by_user_id=actor_id)
+    )
+    rowcount = getattr(cast("CursorResult[Any]", result), "rowcount", 0)
+    return int(rowcount or 0)
+
+
 async def replace_operational_facts(
     session: AsyncSession,
     *,
@@ -284,6 +535,14 @@ def _operational_fact_filters(
     # include the soft-cleaned (legacy composite / ambiguous) ones.
     if not filters.include_inactive:
         clauses.append(OperationalFact.is_active.is_(True))
+    # MD07-3: workbook governance. Only active, non-archived workbooks
+    # contribute to operational reporting (query / aggregation / comparison /
+    # trend / dropdowns). When a caller explicitly scopes to a single workbook
+    # (``uploaded_file_id``), governance is bypassed so an inactive or archived
+    # workbook can still be inspected directly (semantics / breakdown views).
+    if filters.uploaded_file_id is None:
+        clauses.append(UploadedFile.is_active_workbook.is_(True))
+        clauses.append(UploadedFile.archived_at.is_(None))
     if filters.uploaded_file_id is not None:
         clauses.append(OperationalFact.uploaded_file_id == filters.uploaded_file_id)
     if filters.buyer:
@@ -571,6 +830,9 @@ async def get_operational_trend(
             func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("numeric_total"),
             func.count(OperationalFact.id).label("fact_count"),
             func.count(OperationalFact.value_numeric).label("numeric_count"),
+            func.array_agg(func.distinct(UploadedFile.original_filename)).label(
+                "workbook_names"
+            ),
         )
         .select_from(OperationalFact)
         .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
@@ -637,6 +899,9 @@ async def get_operational_comparison(
     resolved automatically (previous-day / nearest-previous-record lookup).
     Returns current/previous totals plus the resolved previous date so the UI
     can render delta indicators.
+
+    MD07-3 Phase 4: also resolves the source workbook(s) feeding each side so
+    the comparison panel can show exactly where the values originate.
     """
     if previous_date is None:
         previous_date = await get_nearest_previous_date(
@@ -675,6 +940,24 @@ async def get_operational_comparison(
 
     current = await _total_for(current_date)
     previous = await _total_for(previous_date)
+    current_sources = await get_workbook_sources_for_date(
+        session,
+        user=user,
+        report_date=current_date,
+        metric_key=metric_key,
+        buyer=buyer,
+        unit=unit,
+        operational_section=operational_section,
+    )
+    previous_sources = await get_workbook_sources_for_date(
+        session,
+        user=user,
+        report_date=previous_date,
+        metric_key=metric_key,
+        buyer=buyer,
+        unit=unit,
+        operational_section=operational_section,
+    )
     return {
         "metric_key": metric_key,
         "buyer": buyer,
@@ -684,7 +967,51 @@ async def get_operational_comparison(
         "previous_date": previous_date,
         "current": current,
         "previous": previous,
+        "current_sources": current_sources,
+        "previous_sources": previous_sources,
     }
+
+
+async def get_workbook_sources_for_date(
+    session: AsyncSession,
+    *,
+    user: AuthUser,
+    report_date: date | None,
+    metric_key: str | None = None,
+    buyer: str | None = None,
+    unit: str | None = None,
+    operational_section: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return the active source workbook(s) feeding a date (MD07-3 Phase 4).
+
+    Resolves which active, non-archived workbooks produced operational facts
+    for ``report_date`` under the supplied scope so the comparison/trend views
+    can name the originating workbook.
+    """
+    if report_date is None:
+        return []
+    filters = OperationalFactFilters(
+        metric_key=metric_key,
+        buyer=buyer,
+        unit=unit,
+        operational_section=operational_section,
+        report_date=report_date,
+    )
+    clauses = _operational_fact_filters(user, _with_default_grain(filters))
+    stmt = (
+        select(
+            UploadedFile.id.label("workbook_id"),
+            UploadedFile.original_filename.label("filename"),
+            func.count(OperationalFact.id).label("fact_count"),
+        )
+        .select_from(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .where(*clauses)
+        .group_by(UploadedFile.id, UploadedFile.original_filename)
+        .order_by(func.count(OperationalFact.id).desc())
+    )
+    result = await session.execute(stmt)
+    return [dict(row._mapping) for row in result.all()]
 
 
 async def get_accessible_operational_fact(
@@ -726,6 +1053,9 @@ async def list_operational_dimensions(
         OperationalFact.deleted_at.is_(None),
         OperationalFact.is_active.is_(True),
         UploadedFile.deleted_at.is_(None),
+        # MD07-3: dropdowns surface only active, non-archived workbooks.
+        UploadedFile.is_active_workbook.is_(True),
+        UploadedFile.archived_at.is_(None),
         _uploaded_file_access_filter(user),
     ]
 

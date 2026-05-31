@@ -1,4 +1,5 @@
 import type {
+  ActiveSourcesResponse,
   BulkReportSavePayload,
   BuyerListResponse,
   OperationalAggregationResponse,
@@ -19,6 +20,9 @@ import type {
   ReportWorkflowAction,
   ReportTypeListResponse,
   UnitListResponse,
+  WorkbookActionResponse,
+  WorkbookDuplicateInfo,
+  WorkbookInventoryResponse,
   WorkbookRebuildResponse,
   WorkbookSemanticBreakdownResponse,
   WorkbookSemanticDiagnosticsResponse,
@@ -285,16 +289,101 @@ export function rebuildWorkbookOperationalFacts(uploadedFileId: string) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// MD07-3: Workbook governance (inventory, activation, archive, active sources)
+// ---------------------------------------------------------------------------
+
+export type WorkbookInventoryScope = "all" | "active" | "archived";
+
+export function listWorkbookInventory(scope: WorkbookInventoryScope = "all") {
+  const params = new URLSearchParams({ scope });
+  return request<WorkbookInventoryResponse>(`/api/reports/workbooks?${params}`);
+}
+
+export function getActiveWorkbookSources() {
+  return request<ActiveSourcesResponse>("/api/reports/workbooks/active-sources");
+}
+
+export function activateWorkbook(uploadedFileId: string) {
+  return request<WorkbookActionResponse>(
+    `/api/reports/workbooks/${uploadedFileId}/activate`,
+    { method: "POST" },
+  );
+}
+
+export function deactivateWorkbook(uploadedFileId: string) {
+  return request<WorkbookActionResponse>(
+    `/api/reports/workbooks/${uploadedFileId}/deactivate`,
+    { method: "POST" },
+  );
+}
+
+export function archiveWorkbook(uploadedFileId: string) {
+  return request<WorkbookActionResponse>(
+    `/api/reports/workbooks/${uploadedFileId}/archive`,
+    { method: "POST" },
+  );
+}
+
+export function restoreWorkbook(uploadedFileId: string) {
+  return request<WorkbookActionResponse>(
+    `/api/reports/workbooks/${uploadedFileId}/restore`,
+    { method: "POST" },
+  );
+}
+
+export async function deleteWorkbook(uploadedFileId: string): Promise<void> {
+  const response = await fetch(`/api/reports/workbooks/${uploadedFileId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok && response.status !== 204) {
+    let message = "Unable to delete workbook.";
+    try {
+      const data = (await response.json()) as ApiErrorBody;
+      message = data.detail ?? data.message ?? message;
+    } catch {
+      message = `Delete failed with status ${response.status}.`;
+    }
+    throw new Error(message);
+  }
+}
+
+/**
+ * Raised when an upload matches an existing active workbook (MD07-3 Phase 3).
+ * Carries the existing workbook metadata so the UI can render the
+ * replace/cancel modal.
+ */
+export class DuplicateWorkbookError extends Error {
+  info: WorkbookDuplicateInfo;
+
+  constructor(info: WorkbookDuplicateInfo) {
+    super(info.message || "Workbook already exists.");
+    this.name = "DuplicateWorkbookError";
+    this.info = info;
+  }
+}
+
+function isDuplicateInfo(value: unknown): value is WorkbookDuplicateInfo {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { code?: string }).code === "DUPLICATE_WORKBOOK"
+  );
+}
+
 export function uploadWorkbook(
   file: File,
   onProgress?: (progress: number) => void,
+  options: { replaceExisting?: boolean } = {},
 ): Promise<WorkbookUploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
 
+  const query = options.replaceExisting ? "?replace_existing=true" : "";
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/reports/workbooks/upload");
+    xhr.open("POST", `/api/reports/workbooks/upload${query}`);
     xhr.responseType = "json";
 
     xhr.upload.onprogress = (event) => {
@@ -304,15 +393,31 @@ export function uploadWorkbook(
     };
 
     xhr.onload = () => {
-      const response = xhr.response as WorkbookUploadResponse | ApiErrorBody | null;
+      const response = xhr.response as
+        | WorkbookUploadResponse
+        | ApiErrorBody
+        | { detail?: WorkbookDuplicateInfo | string }
+        | null;
       if (xhr.status >= 200 && xhr.status < 300 && response) {
         onProgress?.(100);
         resolve(response as WorkbookUploadResponse);
         return;
       }
 
+      // MD07-3 Phase 3: a 409 carries the duplicate workbook metadata so the
+      // UI can offer Replace / Cancel instead of a generic error.
+      if (xhr.status === 409) {
+        const detail = (response as { detail?: unknown } | null)?.detail;
+        if (isDuplicateInfo(detail)) {
+          reject(new DuplicateWorkbookError(detail));
+          return;
+        }
+      }
+
       const errorBody = response as ApiErrorBody | null;
-      reject(new Error(errorBody?.detail ?? errorBody?.message ?? "Workbook upload failed."));
+      const detail =
+        typeof errorBody?.detail === "string" ? errorBody.detail : undefined;
+      reject(new Error(detail ?? errorBody?.message ?? "Workbook upload failed."));
     };
 
     xhr.onerror = () => reject(new Error("Workbook upload failed."));

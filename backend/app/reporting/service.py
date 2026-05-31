@@ -35,6 +35,7 @@ from app.reporting.schemas import (
     OperationalSummaryRow,
     OperationalTrendPoint,
     OperationalTrendResponse,
+    OperationalWorkbookSourceRef,
     ReportCreateRequest,
     ReportMetricCreateRequest,
     ReportMetricResponse,
@@ -42,6 +43,7 @@ from app.reporting.schemas import (
     ReportRowCreateRequest,
     ReportRowResponse,
     ReportSummary,
+    WorkbookInventoryItem,
     WorkbookRebuildResponse,
     WorkbookRebuildResult,
 )
@@ -222,6 +224,11 @@ def serialize_operational_trend(
             numeric_total=_decimal_or_none(row.get("numeric_total")),
             fact_count=int(row.get("fact_count", 0) or 0),
             numeric_count=int(row.get("numeric_count", 0) or 0),
+            workbook_names=[
+                str(name)
+                for name in (row.get("workbook_names") or [])
+                if name
+            ],
         )
         for row in rows
         if row.get("report_date") is not None
@@ -274,7 +281,30 @@ def serialize_operational_comparison(comparison: dict[str, Any]) -> OperationalC
         delta=delta,
         delta_percent=delta_percent,
         direction=direction,
+        current_sources=_workbook_source_refs(comparison.get("current_sources")),
+        previous_sources=_workbook_source_refs(comparison.get("previous_sources")),
     )
+
+
+def _workbook_source_refs(rows: Any) -> list[OperationalWorkbookSourceRef]:
+    if not isinstance(rows, list):
+        return []
+    refs: list[OperationalWorkbookSourceRef] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        workbook_id = row.get("workbook_id")
+        filename = row.get("filename")
+        if workbook_id is None or filename is None:
+            continue
+        refs.append(
+            OperationalWorkbookSourceRef(
+                workbook_id=workbook_id,
+                filename=str(filename),
+                fact_count=int(row.get("fact_count", 0) or 0),
+            )
+        )
+    return refs
 
 
 def serialize_operational_dimensions(
@@ -1033,3 +1063,243 @@ async def rebuild_operational_facts(
     )
     await session.flush()
     return WorkbookRebuildResponse(rebuilt=rebuilt, failed=failed, results=results)
+
+
+# ---------------------------------------------------------------------------
+# MD07-3: Workbook governance service layer
+# ---------------------------------------------------------------------------
+
+
+def _workbook_report_date(metadata: dict[str, Any] | None) -> date | None:
+    """Read the persisted semantic report_date from workbook metadata."""
+    if not isinstance(metadata, dict):
+        return None
+    semantic_mapping = metadata.get("semantic_mapping")
+    if isinstance(semantic_mapping, dict):
+        value = semantic_mapping.get("report_date")
+        if isinstance(value, str) and value:
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                return None
+    return None
+
+
+def serialize_workbook_inventory_item(row: dict[str, Any]) -> WorkbookInventoryItem:
+    """Convert a flat inventory row dict into a WorkbookInventoryItem."""
+    status = str(row.get("status") or "")
+    return WorkbookInventoryItem(
+        workbook_id=row["workbook_id"],
+        filename=row["filename"],
+        report_type_id=row.get("report_type_id"),
+        report_type_name=row.get("report_type_name"),
+        report_date=_workbook_report_date(row.get("metadata")),
+        uploaded_at=row["uploaded_at"],
+        uploaded_by_user_id=row.get("uploaded_by_user_id"),
+        status=status,
+        is_active_workbook=bool(row.get("is_active_workbook")),
+        archived_at=row.get("archived_at"),
+        processed=status == "processed",
+        operational_fact_count=int(row.get("operational_fact_count") or 0),
+        file_size_bytes=row.get("file_size_bytes"),
+    )
+
+
+async def set_workbook_active_state(
+    session: AsyncSession,
+    *,
+    uploaded_file_id: UUID,
+    actor: AuthUser,
+    active: bool,
+) -> dict[str, Any]:
+    """Activate or deactivate a workbook (Phase 2).
+
+    Activating an archived workbook also un-archives it so it can rejoin
+    reporting. Returns the refreshed inventory row dict.
+    """
+    uploaded_file = await repository.get_accessible_uploaded_file(
+        session,
+        uploaded_file_id=uploaded_file_id,
+        user=actor,
+    )
+    if uploaded_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workbook not found.",
+        )
+
+    previous = uploaded_file.is_active_workbook
+    uploaded_file.is_active_workbook = active
+    if active and uploaded_file.archived_at is not None:
+        uploaded_file.archived_at = None
+        uploaded_file.archived_by_user_id = None
+
+    add_audit_log(
+        session,
+        actor=actor,
+        action="workbook.activated" if active else "workbook.deactivated",
+        target_type="uploaded_file",
+        target_id=uploaded_file.id,
+        old_values={"is_active_workbook": previous},
+        new_values={"is_active_workbook": active},
+        metadata={"original_filename": uploaded_file.original_filename},
+    )
+    await session.flush()
+
+    row = await repository.get_workbook_inventory_item(
+        session,
+        user=actor,
+        uploaded_file_id=uploaded_file_id,
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workbook not found.",
+        )
+    return row
+
+
+async def archive_workbook(
+    session: AsyncSession,
+    *,
+    uploaded_file_id: UUID,
+    actor: AuthUser,
+) -> dict[str, Any]:
+    """Archive a workbook (Phase 5).
+
+    Archived workbooks remain stored but are excluded from all reporting,
+    dropdowns, and comparisons. Archiving also deactivates the workbook.
+    """
+    uploaded_file = await repository.get_accessible_uploaded_file(
+        session,
+        uploaded_file_id=uploaded_file_id,
+        user=actor,
+    )
+    if uploaded_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workbook not found.",
+        )
+
+    uploaded_file.archived_at = datetime.now(UTC)
+    uploaded_file.archived_by_user_id = actor.id
+    uploaded_file.is_active_workbook = False
+
+    add_audit_log(
+        session,
+        actor=actor,
+        action="workbook.archived",
+        target_type="uploaded_file",
+        target_id=uploaded_file.id,
+        metadata={"original_filename": uploaded_file.original_filename},
+    )
+    await session.flush()
+
+    row = await repository.get_workbook_inventory_item(
+        session,
+        user=actor,
+        uploaded_file_id=uploaded_file_id,
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workbook not found.",
+        )
+    return row
+
+
+async def restore_workbook(
+    session: AsyncSession,
+    *,
+    uploaded_file_id: UUID,
+    actor: AuthUser,
+) -> dict[str, Any]:
+    """Restore an archived workbook back into reporting (un-archive + activate)."""
+    uploaded_file = await repository.get_accessible_uploaded_file(
+        session,
+        uploaded_file_id=uploaded_file_id,
+        user=actor,
+    )
+    if uploaded_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workbook not found.",
+        )
+
+    uploaded_file.archived_at = None
+    uploaded_file.archived_by_user_id = None
+    uploaded_file.is_active_workbook = True
+
+    add_audit_log(
+        session,
+        actor=actor,
+        action="workbook.restored",
+        target_type="uploaded_file",
+        target_id=uploaded_file.id,
+        metadata={"original_filename": uploaded_file.original_filename},
+    )
+    await session.flush()
+
+    row = await repository.get_workbook_inventory_item(
+        session,
+        user=actor,
+        uploaded_file_id=uploaded_file_id,
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workbook not found.",
+        )
+    return row
+
+
+async def delete_workbook(
+    session: AsyncSession,
+    *,
+    uploaded_file_id: UUID,
+    actor: AuthUser,
+) -> None:
+    """Soft-delete a workbook and its operational facts (Phase 5, admin only).
+
+    The workbook row and its facts are marked deleted (never hard-deleted) so
+    audit history is preserved and operational queries stop reading them.
+    """
+    if actor.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can delete workbooks.",
+        )
+
+    uploaded_file = await repository.get_accessible_uploaded_file(
+        session,
+        uploaded_file_id=uploaded_file_id,
+        user=actor,
+    )
+    if uploaded_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workbook not found.",
+        )
+
+    fact_count = await repository.soft_delete_workbook_facts(
+        session,
+        uploaded_file_id=uploaded_file_id,
+        actor_id=actor.id,
+    )
+
+    uploaded_file.deleted_at = datetime.now(UTC)
+    uploaded_file.deleted_by_user_id = actor.id
+    uploaded_file.is_active_workbook = False
+
+    add_audit_log(
+        session,
+        actor=actor,
+        action="workbook.deleted",
+        target_type="uploaded_file",
+        target_id=uploaded_file.id,
+        metadata={
+            "original_filename": uploaded_file.original_filename,
+            "soft_deleted_fact_count": fact_count,
+        },
+    )
+    await session.flush()
