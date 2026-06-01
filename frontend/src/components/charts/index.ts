@@ -15,6 +15,7 @@ export { KpiCard } from "./kpi-card";
 export { ChartTooltip } from "./chart-tooltip";
 export { ChartDemo } from "./chart-demo";
 export { ChartBuilderPage } from "./chart-builder-page";
+export { ChartExportButtons } from "./export-buttons";
 // MD08-3A: date-aware dashboard components
 export { GroupedBarChart } from "./grouped-bar-chart";
 export { MultiSeriesTrend } from "./multi-series-trend";

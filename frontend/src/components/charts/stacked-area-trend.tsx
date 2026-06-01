@@ -9,7 +9,7 @@
  *   Percentage — each date normalized to 100% so share-of-total is visible
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -24,6 +24,7 @@ import type { TimeSeriesDataset, TimeSeriesPoint, StackMode } from "./types";
 import { ChartTooltip } from "./chart-tooltip";
 import { useChartTheme } from "./use-chart-theme";
 import { formatShortDate } from "./adapters";
+import { ChartExportButtons } from "./export-buttons";
 
 type StackedAreaTrendProps = {
   data: TimeSeriesDataset;
@@ -56,6 +57,7 @@ export function StackedAreaTrend({
 }: StackedAreaTrendProps) {
   const { theme, getColor } = useChartTheme();
   const [mode, setMode] = useState<StackMode>("absolute");
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const renderData = useMemo(
     () => (mode === "percentage" ? toPercentage(data) : data),
@@ -84,32 +86,35 @@ export function StackedAreaTrend({
   }
 
   return (
-    <div className="w-full rounded-lg border border-border bg-card p-4">
+    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         {title && <h3 className="text-sm font-semibold text-foreground">{title}</h3>}
-        <div className="inline-flex rounded-md border border-border p-0.5 text-xs">
-          <button
-            type="button"
-            onClick={() => setMode("absolute")}
-            className={`rounded px-2 py-1 font-medium transition-colors ${
-              mode === "absolute"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Absolute
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("percentage")}
-            className={`rounded px-2 py-1 font-medium transition-colors ${
-              mode === "percentage"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Percentage
-          </button>
+        <div className="flex items-center gap-3">
+          <div className="inline-flex rounded-md border border-border p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setMode("absolute")}
+              className={`rounded px-2 py-1 font-medium transition-colors ${
+                mode === "absolute"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Absolute
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("percentage")}
+              className={`rounded px-2 py-1 font-medium transition-colors ${
+                mode === "percentage"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Percentage
+            </button>
+          </div>
+          <ChartExportButtons containerRef={containerRef} filename={title} />
         </div>
       </div>
       <ResponsiveContainer width="100%" height={height}>

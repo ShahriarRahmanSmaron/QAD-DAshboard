@@ -9,6 +9,7 @@ import {
 } from "ag-grid-community";
 import {
   Database,
+  Download,
   Filter,
   Layers,
   Loader2,
@@ -22,6 +23,7 @@ import { OperationalFactTraceDrawer } from "@/components/reports/operational-fac
 import { Button } from "@/components/ui/button";
 import type { OperationalQueryParams } from "@/lib/reports/api";
 import { listReportTypes } from "@/lib/reports/api";
+import { downloadBinary, queryString } from "@/lib/export/downloads";
 import {
   useOperationalAggregation,
   useOperationalDimensions,
@@ -197,6 +199,7 @@ export function OperationalQueryModule() {
   });
 
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
+  const exportQuery = queryString({ ...queryParams, group_by: groupBy });
 
   const columnDefs = useMemo<ColDef<OperationalFact>[]>(
     () => [
@@ -371,6 +374,18 @@ export function OperationalQueryModule() {
             )}
           </div>
           <div className="flex items-center gap-1">
+            <Button
+              onClick={() =>
+                downloadBinary(
+                  `/api/reports/operations/export.xlsx${exportQuery ? `?${exportQuery}` : ""}`,
+                  "operational-query.xlsx",
+                )
+              }
+              variant="outline"
+            >
+              <Download className="size-4" />
+              Excel
+            </Button>
             <Button
               aria-label="Refresh facts"
               disabled={factsQuery.isFetching}

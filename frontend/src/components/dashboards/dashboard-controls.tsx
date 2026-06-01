@@ -75,12 +75,17 @@ export function DashboardControls({
   availableDates,
   onChange,
 }: DashboardControlsProps) {
-  function toggleDate(date: string) {
-    const exists = state.selectedDates.includes(date);
-    const next = exists
-      ? state.selectedDates.filter((d) => d !== date)
-      : [...state.selectedDates, date];
-    onChange({ selectedDates: next.sort((a, b) => a.localeCompare(b)) });
+  const dateA = state.selectedDates[0] || "";
+  const dateB = state.selectedDates[1] || "";
+
+  function handleDateAChange(val: string) {
+    const nextDates = [val, dateB || val].sort((a, b) => a.localeCompare(b));
+    onChange({ selectedDates: nextDates });
+  }
+
+  function handleDateBChange(val: string) {
+    const nextDates = [dateA || val, val].sort((a, b) => a.localeCompare(b));
+    onChange({ selectedDates: nextDates });
   }
 
   return (
@@ -133,8 +138,8 @@ export function DashboardControls({
           </select>
         </ControlGroup>
 
-        {/* Comparison Mode */}
-        <ControlGroup label="Comparison Mode">
+        {/* Comparison Type */}
+        <ControlGroup label="Comparison Type">
           <select
             value={state.comparisonMode}
             onChange={(e) =>
@@ -188,35 +193,49 @@ export function DashboardControls({
         </div>
       )}
 
-      {/* Selected-dates picker */}
+      {/* Custom Date Comparison Dropdowns */}
       {state.comparisonMode === "selected-dates" && (
         <div className="space-y-2 border-t border-border pt-3">
-          <p className="text-xs font-medium text-muted-foreground">
-            Select report dates to compare
+          <p className="text-xs font-semibold text-muted-foreground">
+            Custom Date Comparison
           </p>
           {availableDates.length === 0 ? (
             <p className="text-xs text-muted-foreground">
               No report dates available in the current range.
             </p>
           ) : (
-            <div className="flex flex-wrap gap-2">
-              {availableDates.map((date) => {
-                const active = state.selectedDates.includes(date);
-                return (
-                  <button
-                    key={date}
-                    type="button"
-                    onClick={() => toggleDate(date)}
-                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                      active
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border bg-background text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {formatShortDate(date)}
-                  </button>
-                );
-              })}
+            <div className="flex flex-wrap gap-4 items-center">
+              <div className="space-y-1">
+                <span className="block text-[11px] font-medium text-muted-foreground">Base Date (Date A)</span>
+                <select
+                  value={dateA}
+                  onChange={(e) => handleDateAChange(e.target.value)}
+                  className="block w-48 rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="" disabled>Select Date A</option>
+                  {availableDates.map((date) => (
+                    <option key={`a-${date}`} value={date}>
+                      {formatShortDate(date)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="text-muted-foreground text-xs self-end pb-2 font-medium">vs</div>
+              <div className="space-y-1">
+                <span className="block text-[11px] font-medium text-muted-foreground">Comparison Date (Date B)</span>
+                <select
+                  value={dateB}
+                  onChange={(e) => handleDateBChange(e.target.value)}
+                  className="block w-48 rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="" disabled>Select Date B</option>
+                  {availableDates.map((date) => (
+                    <option key={`b-${date}`} value={date}>
+                      {formatShortDate(date)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
         </div>

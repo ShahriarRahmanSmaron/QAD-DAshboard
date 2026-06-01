@@ -10,7 +10,7 @@
  * The toggle is driven by clicking legend items, hiding/showing each series.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -24,6 +24,7 @@ import type { TimeSeriesDataset } from "./types";
 import { ChartTooltip } from "./chart-tooltip";
 import { useChartTheme } from "./use-chart-theme";
 import { formatShortDate } from "./adapters";
+import { ChartExportButtons } from "./export-buttons";
 
 type MultiSeriesTrendProps = {
   data: TimeSeriesDataset;
@@ -40,6 +41,7 @@ export function MultiSeriesTrend({
 }: MultiSeriesTrendProps) {
   const { theme, getColor } = useChartTheme();
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const colorFor = useMemo(() => {
     const map: Record<string, string> = {};
@@ -72,10 +74,13 @@ export function MultiSeriesTrend({
   const visibleKeys = data.seriesKeys.filter((key) => !hidden.has(key));
 
   return (
-    <div className="w-full rounded-lg border border-border bg-card p-4">
-      {title && (
-        <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
-      )}
+    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center justify-between mb-3 gap-2">
+        {title && (
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        )}
+        <ChartExportButtons containerRef={containerRef} filename={title} />
+      </div>
 
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={data.points} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>

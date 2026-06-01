@@ -105,6 +105,19 @@ export function KpiCard({ kpi, formatValue, showSparkline = true }: KpiCardProps
             <span>No change</span>
           </div>
         )}
+
+        {/* Primary Driver */}
+        {kpi.primaryDriver && kpi.driverImpact !== undefined && (
+          <div className="mt-3 pt-2 border-t border-border/40 text-[11px] text-muted-foreground flex items-center justify-between">
+            <div>
+              <span className="font-medium text-muted-foreground">Driver: </span>
+              <span className="font-semibold text-foreground">{kpi.primaryDriver}</span>
+            </div>
+            <span className={`font-semibold ${directionColor(kpi.driverDirection ?? "flat")}`}>
+              {kpi.driverImpact > 0 ? "+" : ""}{format(kpi.driverImpact)}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

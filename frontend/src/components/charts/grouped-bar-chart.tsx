@@ -10,6 +10,7 @@
  * sizing and light/dark mode are all supported by reusing the chart theme.
  */
 
+import { useRef } from "react";
 import {
   Bar,
   BarChart,
@@ -23,6 +24,7 @@ import {
 import type { GroupedSeriesDataset } from "./types";
 import { ChartTooltip } from "./chart-tooltip";
 import { useChartTheme } from "./use-chart-theme";
+import { ChartExportButtons } from "./export-buttons";
 
 type GroupedBarChartProps = {
   data: GroupedSeriesDataset;
@@ -44,6 +46,7 @@ export function GroupedBarChart({
   formatValue,
 }: GroupedBarChartProps) {
   const { theme, getColor } = useChartTheme();
+  const containerRef = useRef<HTMLDivElement>(null);
 
   if (!data.points.length || !data.seriesKeys.length) {
     return (
@@ -57,10 +60,13 @@ export function GroupedBarChart({
   }
 
   return (
-    <div className="w-full rounded-lg border border-border bg-card p-4">
-      {title && (
-        <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
-      )}
+    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center justify-between mb-3 gap-2">
+        {title && (
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        )}
+        <ChartExportButtons containerRef={containerRef} filename={title} />
+      </div>
       <ResponsiveContainer width="100%" height={height}>
         <BarChart
           data={data.points}

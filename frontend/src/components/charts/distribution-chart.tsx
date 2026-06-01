@@ -6,6 +6,7 @@
  * Pie/donut chart for showing proportional distribution across categories.
  */
 
+import { useRef } from "react";
 import {
   Cell,
   Legend,
@@ -16,6 +17,7 @@ import {
 } from "recharts";
 import type { GroupedTotalsDataset } from "./types";
 import { useChartTheme } from "./use-chart-theme";
+import { ChartExportButtons } from "./export-buttons";
 
 type DistributionChartProps = {
   data: GroupedTotalsDataset;
@@ -61,6 +63,7 @@ export function DistributionChart({
   formatValue,
 }: DistributionChartProps) {
   const { getColor } = useChartTheme();
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const items = data.items.slice(0, maxItems);
 
@@ -79,10 +82,13 @@ export function DistributionChart({
   }));
 
   return (
-    <div className="w-full rounded-lg border border-border bg-card p-4">
-      {title && (
-        <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
-      )}
+    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center justify-between mb-3 gap-2">
+        {title && (
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        )}
+        <ChartExportButtons containerRef={containerRef} filename={title} />
+      </div>
       <ResponsiveContainer width="100%" height={height}>
         <PieChart>
           <Pie

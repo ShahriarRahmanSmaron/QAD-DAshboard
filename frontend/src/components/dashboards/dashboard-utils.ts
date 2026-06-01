@@ -42,8 +42,8 @@ export const COMPARISON_MODE_OPTIONS: {
   label: string;
 }[] = [
   { value: "latest-previous", label: "Latest vs Previous" },
-  { value: "selected-dates", label: "Selected Dates" },
-  { value: "trend", label: "Trend Mode" },
+  { value: "selected-dates", label: "Custom Date Comparison" },
+  { value: "trend", label: "Trend Analysis" },
 ];
 
 export const GROUP_DIMENSION_OPTIONS: { value: GroupDimension; label: string }[] = [

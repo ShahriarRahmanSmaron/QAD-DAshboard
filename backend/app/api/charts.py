@@ -17,6 +17,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.constants import Permission
@@ -24,6 +25,7 @@ from app.auth.dependencies import require_permission
 from app.auth.schemas import AuthUser
 from app.db.session import get_db_session
 from app.reporting import repository
+from app.reporting.export_layer import CONTENT_TYPE_XLSX, build_trend_xlsx
 from app.reporting.repository import OperationalFactFilters
 from app.reporting.schemas import (
     OperationalAggregationResponse,
@@ -85,6 +87,92 @@ async def chart_time_series(
         operational_section=section,
         rows=rows,
         series_by=series_by,
+    )
+
+
+@router.get(
+    "/time-series/export.xlsx",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Trend chart dataset export.",
+            "content": {CONTENT_TYPE_XLSX: {}},
+        }
+    },
+)
+async def export_chart_time_series(
+    session: SessionDep,
+    user: ChartReaderDep,
+    metric: Annotated[str, Query(min_length=1)],
+    buyer: str | None = None,
+    unit: str | None = None,
+    section: str | None = None,
+    report_type_id: UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    classification: str | None = None,
+    series_by: Annotated[str | None, Query(pattern="^(buyer|unit|section)$")] = None,
+    limit: Annotated[int, Query(ge=1, le=365)] = 365,
+) -> Response:
+    binary = await build_trend_xlsx(
+        session,
+        user=user,
+        metric_key=metric,
+        buyer=buyer,
+        unit=unit,
+        operational_section=section,
+        report_type_id=report_type_id,
+        date_from=date_from,
+        date_to=date_to,
+        classification=classification,
+        series_by=series_by,
+        limit=limit,
+    )
+    
+    report_type_name = "All"
+    if report_type_id:
+        from app.reporting.models import ReportType
+        report_type = await session.get(ReportType, report_type_id)
+        if report_type:
+            report_type_name = report_type.name
+
+    safe_rt = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in report_type_name).strip("_")
+    safe_metric = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in metric).strip("_")
+    filename = f"{safe_rt}_{safe_metric}_Trend_{date.today().isoformat()}.xlsx"
+
+    from app.reporting.service import add_audit_log
+    add_audit_log(
+        session,
+        actor=user,
+        action="trend_chart.export",
+        target_type="export",
+        target_id=user.id,
+        metadata={
+            "format": "xlsx",
+            "report_type": report_type_name,
+            "filters": {
+                "metric": metric,
+                "buyer": buyer,
+                "unit": unit,
+                "section": section,
+                "report_type_id": str(report_type_id) if report_type_id else None,
+                "date_from": date_from.isoformat() if date_from else None,
+                "date_to": date_to.isoformat() if date_to else None,
+                "classification": classification,
+                "series_by": series_by,
+                "limit": limit,
+            }
+        }
+    )
+    await session.commit()
+
+    return Response(
+        content=binary,
+        media_type=CONTENT_TYPE_XLSX,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
     )
 
 

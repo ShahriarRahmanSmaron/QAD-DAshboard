@@ -566,6 +566,74 @@ export function trendToLatestKpi(
     direction = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
   }
 
+  // Calculate primary driver from unit series
+  let primaryDriver: string | undefined = undefined;
+  let driverImpact: number | undefined = undefined;
+  let driverDirection: "up" | "down" | "flat" | undefined = undefined;
+
+  if (previousDate && latestDate) {
+    const unitDeltas = new Map<string, { prev: number; curr: number }>();
+    for (const point of trend.points) {
+      const unit = point.series;
+      if (!unit) continue;
+      const val = toNumber(point.numeric_total);
+      let entry = unitDeltas.get(unit);
+      if (!entry) {
+        entry = { prev: 0, curr: 0 };
+        unitDeltas.set(unit, entry);
+      }
+      if (point.report_date === previousDate) {
+        entry.prev += val;
+      } else if (point.report_date === latestDate) {
+        entry.curr += val;
+      }
+    }
+
+    let bestUnit: string | null = null;
+    let bestDelta = 0;
+
+    const overallDelta = delta ?? 0;
+    for (const [unit, entry] of unitDeltas.entries()) {
+      const unitDelta = entry.curr - entry.prev;
+      if (overallDelta > 0) {
+        // Looking for largest increase
+        if (unitDelta > bestDelta) {
+          bestDelta = unitDelta;
+          bestUnit = unit;
+        }
+      } else if (overallDelta < 0) {
+        // Looking for largest decrease (most negative)
+        if (unitDelta < bestDelta) {
+          bestDelta = unitDelta;
+          bestUnit = unit;
+        }
+      } else {
+        // Flat or no clear direction, use largest absolute change
+        if (Math.abs(unitDelta) > Math.abs(bestDelta)) {
+          bestDelta = unitDelta;
+          bestUnit = unit;
+        }
+      }
+    }
+
+    // Fallback to absolute change if no directed unit was found
+    if (!bestUnit) {
+      for (const [unit, entry] of unitDeltas.entries()) {
+        const unitDelta = entry.curr - entry.prev;
+        if (Math.abs(unitDelta) > Math.abs(bestDelta)) {
+          bestDelta = unitDelta;
+          bestUnit = unit;
+        }
+      }
+    }
+
+    if (bestUnit && bestDelta !== 0) {
+      primaryDriver = bestUnit;
+      driverImpact = bestDelta;
+      driverDirection = bestDelta > 0 ? "up" : bestDelta < 0 ? "down" : "flat";
+    }
+  }
+
   // Sparkline across the available report dates.
   const sparkline = dates.map((d) => byDate.get(d) ?? 0);
 
@@ -577,5 +645,8 @@ export function trendToLatestKpi(
     direction,
     previousValue,
     sparkline,
+    primaryDriver,
+    driverImpact,
+    driverDirection,
   };
 }

@@ -1,10 +1,11 @@
 from datetime import date
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.constants import Permission, UserRole
@@ -12,6 +13,7 @@ from app.auth.dependencies import require_permission, require_role
 from app.auth.schemas import AuthUser
 from app.db.session import get_db_session
 from app.reporting import repository
+from app.reporting.export_layer import CONTENT_TYPE_XLSX, build_operational_query_xlsx
 from app.reporting.repository import OperationalFactFilters
 from app.reporting.schemas import (
     ActiveSourcesResponse,
@@ -448,6 +450,147 @@ async def get_operational_dimensions(
         session, user=user, report_type_id=report_type_id
     )
     return serialize_operational_dimensions(data)
+
+
+@router.get(
+    "/operations/export.xlsx",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Operational query export with filters, grouped data, and detail data.",
+            "content": {CONTENT_TYPE_XLSX: {}},
+        }
+    },
+)
+async def export_operational_query(
+    session: SessionDep,
+    user: ReportReaderDep,
+    group_by: Annotated[list[str] | None, Query()] = None,
+    uploaded_file_id: UUID | None = None,
+    buyer: str | None = None,
+    unit: str | None = None,
+    buyer_id: UUID | None = None,
+    unit_id: UUID | None = None,
+    metric: str | None = None,
+    section: str | None = None,
+    report_type_id: UUID | None = None,
+    report_date: date | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    value_min: Decimal | None = None,
+    value_max: Decimal | None = None,
+    value_type: str | None = None,
+    classification: str | None = None,
+    include_inactive: bool = False,
+    search: str | None = None,
+) -> Response:
+    filters = OperationalFactFilters(
+        uploaded_file_id=uploaded_file_id,
+        buyer=buyer,
+        unit=unit,
+        buyer_id=buyer_id,
+        unit_id=unit_id,
+        metric_key=metric,
+        operational_section=section,
+        report_type_id=report_type_id,
+        report_date=report_date,
+        date_from=date_from,
+        date_to=date_to,
+        value_min=value_min,
+        value_max=value_max,
+        value_type=value_type,
+        row_classification=classification,
+        include_inactive=include_inactive,
+        search=search,
+    )
+    binary = await build_operational_query_xlsx(
+        session,
+        user=user,
+        filters=filters,
+        group_by=group_by,
+    )
+    
+    report_type_name = "All"
+    if report_type_id:
+        report_type = await session.get(repository.ReportType, report_type_id)
+        if report_type:
+            report_type_name = report_type.name
+    
+    safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in report_type_name).strip("_")
+    filename = f"{safe_name}_Query_{date.today().isoformat()}.xlsx"
+
+    from app.reporting.service import add_audit_log
+    add_audit_log(
+        session,
+        actor=user,
+        action="operational_query.export",
+        target_type="export",
+        target_id=user.id,
+        metadata={
+            "format": "xlsx",
+            "report_type": report_type_name,
+            "filters": {
+                "uploaded_file_id": str(uploaded_file_id) if uploaded_file_id else None,
+                "buyer": buyer,
+                "unit": unit,
+                "buyer_id": str(buyer_id) if buyer_id else None,
+                "unit_id": str(unit_id) if unit_id else None,
+                "metric": metric,
+                "section": section,
+                "report_type_id": str(report_type_id) if report_type_id else None,
+                "report_date": report_date.isoformat() if report_date else None,
+                "date_from": date_from.isoformat() if date_from else None,
+                "date_to": date_to.isoformat() if date_to else None,
+                "value_min": float(value_min) if value_min else None,
+                "value_max": float(value_max) if value_max else None,
+                "value_type": value_type,
+                "classification": classification,
+                "include_inactive": include_inactive,
+                "search": search,
+                "group_by": group_by,
+            }
+        }
+    )
+    await session.commit()
+
+    return Response(
+        content=binary,
+        media_type=CONTENT_TYPE_XLSX,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+class ClientExportAuditRequest(BaseModel):
+    action: str
+    format: str
+    report_type: str | None = None
+    filters: dict[str, Any] = {}
+
+
+@router.post("/exports/audit")
+async def audit_client_export(
+    payload: ClientExportAuditRequest,
+    session: SessionDep,
+    user: ReportReaderDep,
+) -> dict[str, str]:
+    from app.reporting.service import add_audit_log
+    add_audit_log(
+        session,
+        actor=user,
+        action=payload.action,
+        target_type="export",
+        target_id=user.id,
+        metadata={
+            "format": payload.format,
+            "report_type": payload.report_type,
+            "filters": payload.filters,
+        }
+    )
+    await session.commit()
+    return {"status": "ok"}
 
 
 @router.get("/operations/facts/{fact_id}/trace", response_model=OperationalFactTraceResponse)

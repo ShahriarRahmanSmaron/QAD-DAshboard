@@ -30,6 +30,46 @@
   --sidebar-border: var(--border);
 }
 
+@media print {
+  @page {
+    margin: 12mm;
+    size: A4 landscape;
+  }
+
+  body[data-print-title="wf-test-dashboard"] * {
+    visibility: hidden;
+  }
+
+  body[data-print-title="wf-test-dashboard"] .dashboard-print-area,
+  body[data-print-title="wf-test-dashboard"] .dashboard-print-area * {
+    visibility: visible;
+  }
+
+  body[data-print-title="wf-test-dashboard"] .dashboard-print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    background: white;
+    color: #111827;
+  }
+
+  body[data-print-title="wf-test-dashboard"] .print-hidden,
+  body[data-print-title="wf-test-dashboard"] .print-hidden * {
+    display: none !important;
+  }
+
+  body[data-print-title="wf-test-dashboard"] .recharts-responsive-container {
+    width: 100% !important;
+    height: 350px !important;
+  }
+
+  body[data-print-title="wf-test-dashboard"] .dashboard-print-area section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 2rem;
+  }
+}
+
 .dark {
   --background: oklch(0.19 0.018 40);
   --foreground: oklch(0.96 0.008 70);

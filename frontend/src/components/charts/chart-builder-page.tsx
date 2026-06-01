@@ -15,8 +15,9 @@
  *   5. Date Range — Last 7 Days, Last 30 Days, Custom
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Download, FileSpreadsheet, ImageDown } from "lucide-react";
 import { listReportTypes } from "@/lib/reports/api";
 import { useOperationalDimensions } from "@/lib/reports/operational-hooks";
 import {
@@ -35,6 +36,11 @@ import type {
   OperationalDimensionOption,
   ReportTypeOption,
 } from "@/lib/reports/types";
+import {
+  downloadBinary,
+  exportChartElement,
+  queryString,
+} from "@/lib/export/downloads";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -95,6 +101,7 @@ export function ChartBuilderPage() {
   const [dateRange, setDateRange] = useState<DateRangeValue>({ range: "30d" });
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  const chartExportRef = useRef<HTMLDivElement>(null);
 
   // Fetch report types
   const reportTypesQuery = useQuery({
@@ -192,6 +199,19 @@ export function ChartBuilderPage() {
   const metrics: OperationalDimensionOption[] = dimensionsQuery.data?.metrics ?? [];
   const selectedReportTypeName = reportTypes.find((rt) => rt.id === selectedReportTypeId)?.name;
   const selectedMetricLabel = metrics.find((m) => m.value === selectedMetric)?.label ?? selectedMetric;
+  const chartExportParams = useMemo(() => {
+    const dateParams = dateRangeToApiParams(effectiveDateRange);
+    return {
+      metric: selectedMetric,
+      report_type_id: selectedReportTypeId || undefined,
+      series_by:
+        selectedDimension === "date"
+          ? undefined
+          : (selectedDimension as "buyer" | "unit" | "section"),
+      ...dateParams,
+      limit: 365,
+    };
+  }, [effectiveDateRange, selectedDimension, selectedMetric, selectedReportTypeId]);
 
   // Build chart title
   const chartTitle = useMemo(() => {
@@ -341,13 +361,63 @@ export function ChartBuilderPage() {
         )}
 
         {canGenerate && chartQuery.data && (
-          <ChartRenderer
-            kind={chartQuery.data.kind}
-            dataset={chartQuery.data.dataset}
-            chartType={selectedChartType}
-            title={chartTitle}
-            dimension={selectedDimension}
-          />
+          <div className="space-y-3">
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm transition hover:bg-secondary"
+                onClick={() => {
+                  const query = queryString(chartExportParams);
+                  void downloadBinary(
+                    `/api/charts/time-series/export.xlsx${query ? `?${query}` : ""}`,
+                    "trend-dataset.xlsx",
+                  );
+                }}
+                type="button"
+              >
+                <FileSpreadsheet className="size-4" />
+                Dataset
+              </button>
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm transition hover:bg-secondary"
+                onClick={() =>
+                  void exportChartElement(chartExportRef.current, "png", "trend-chart.png")
+                }
+                type="button"
+              >
+                <ImageDown className="size-4" />
+                PNG
+              </button>
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm transition hover:bg-secondary"
+                onClick={() =>
+                  void exportChartElement(chartExportRef.current, "jpeg", "trend-chart.jpeg")
+                }
+                type="button"
+              >
+                <Download className="size-4" />
+                JPEG
+              </button>
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm transition hover:bg-secondary"
+                onClick={() =>
+                  void exportChartElement(chartExportRef.current, "svg", "buyer-chart.svg")
+                }
+                type="button"
+              >
+                <Download className="size-4" />
+                SVG
+              </button>
+            </div>
+            <div ref={chartExportRef}>
+              <ChartRenderer
+                kind={chartQuery.data.kind}
+                dataset={chartQuery.data.dataset}
+                chartType={selectedChartType}
+                title={chartTitle}
+                dimension={selectedDimension}
+              />
+            </div>
+          </div>
         )}
       </div>
     </div>

@@ -7,6 +7,7 @@
  * Renders operational trend data over time with tooltips, legends, and responsive sizing.
  */
 
+import { useRef } from "react";
 import {
   Area,
   AreaChart,
@@ -22,6 +23,7 @@ import {
 import type { TimeSeriesDataset } from "./types";
 import { ChartTooltip } from "./chart-tooltip";
 import { useChartTheme } from "./use-chart-theme";
+import { ChartExportButtons } from "./export-buttons";
 
 type TrendChartVariant = "line" | "multi-line" | "area" | "stacked-area";
 
@@ -56,6 +58,7 @@ export function TrendChart({
   formatDate = defaultFormatDate,
 }: TrendChartProps) {
   const { theme, getColor } = useChartTheme();
+  const containerRef = useRef<HTMLDivElement>(null);
 
   if (!data.points.length) {
     return (
@@ -70,10 +73,13 @@ export function TrendChart({
   const ChartComponent = isArea ? AreaChart : LineChart;
 
   return (
-    <div className="w-full rounded-lg border border-border bg-card p-4">
-      {title && (
-        <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
-      )}
+    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center justify-between mb-3 gap-2">
+        {title && (
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        )}
+        <ChartExportButtons containerRef={containerRef} filename={title} />
+      </div>
       <ResponsiveContainer width="100%" height={height}>
         <ChartComponent data={data.points} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
           {showGrid && (

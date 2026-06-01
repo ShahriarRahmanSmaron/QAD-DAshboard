@@ -7,6 +7,7 @@
  * Shows values with percentage bars for quick visual comparison.
  */
 
+import { useRef } from "react";
 import {
   Bar,
   BarChart,
@@ -19,6 +20,7 @@ import {
 import type { GroupedTotalsDataset } from "./types";
 import { ChartTooltip } from "./chart-tooltip";
 import { useChartTheme } from "./use-chart-theme";
+import { ChartExportButtons } from "./export-buttons";
 
 type RankingChartProps = {
   data: GroupedTotalsDataset;
@@ -40,6 +42,7 @@ export function RankingChart({
   colorByIndex = false,
 }: RankingChartProps) {
   const { theme, getColor } = useChartTheme();
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const items = data.items.slice(0, maxItems);
   const computedHeight = height ?? Math.max(200, items.length * 36 + 40);
@@ -59,10 +62,13 @@ export function RankingChart({
   }));
 
   return (
-    <div className="w-full rounded-lg border border-border bg-card p-4">
-      {title && (
-        <h3 className="mb-3 text-sm font-semibold text-foreground">{title}</h3>
-      )}
+    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center justify-between mb-3 gap-2">
+        {title && (
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        )}
+        <ChartExportButtons containerRef={containerRef} filename={title} />
+      </div>
       <ResponsiveContainer width="100%" height={computedHeight}>
         <BarChart
           data={chartData}

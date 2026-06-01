@@ -12,7 +12,7 @@ export default async function WfTestDashboardPage() {
 
   return (
     <AppShell user={user}>
-      <WfTestDashboard />
+      <WfTestDashboard user={user} />
     </AppShell>
   );
 }

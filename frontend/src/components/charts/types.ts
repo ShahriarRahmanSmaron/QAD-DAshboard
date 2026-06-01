@@ -78,6 +78,9 @@ export type KpiValue = {
   direction?: "up" | "down" | "flat";
   previousValue?: number | string | null;
   sparkline?: number[];
+  primaryDriver?: string;
+  driverImpact?: number;
+  driverDirection?: "up" | "down" | "flat";
 };
 
 // ---------------------------------------------------------------------------
