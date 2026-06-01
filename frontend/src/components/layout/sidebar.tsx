@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
 import {
+  BarChart3,
   ClipboardCheck,
   Database,
   LayoutDashboard,
@@ -33,6 +34,12 @@ const navigation = [
     label: "Operational Query",
     href: "/reports/operations",
     icon: Database,
+    roles: ["admin", "editor", "viewer"],
+  },
+  {
+    label: "Chart Builder",
+    href: "/reports/charts",
+    icon: BarChart3,
     roles: ["admin", "editor", "viewer"],
   },
   {
