@@ -907,6 +907,7 @@ async def get_operational_trend(
     date_from: date | None = None,
     date_to: date | None = None,
     classification: str | None = None,
+    series_by: str | None = None,
     limit: int = 180,
 ) -> list[dict[str, Any]]:
     """Return a per-date history series for a metric (optionally scoped).
@@ -914,6 +915,12 @@ async def get_operational_trend(
     Supports trend retrieval for buyer+metric, unit+metric, and
     buyer+unit+metric. Results are grouped by ``report_date`` so the frontend
     can render a tabular trend preview without an N+1 fetch per day.
+
+    MD08-2A: When ``series_by`` is supplied (one of buyer, unit, section),
+    results are grouped by ``report_date + series_by`` to produce multi-series
+    time-series data. Each row includes a ``series`` field with the secondary
+    dimension value. The date grain is always preserved — multiple dates are
+    never aggregated into a single point.
     """
     filters = OperationalFactFilters(
         metric_key=metric_key,
@@ -928,26 +935,44 @@ async def get_operational_trend(
     clauses = _operational_fact_filters(user, _with_default_grain(filters))
     clauses.append(OperationalFact.report_date.is_not(None))
 
+    # MD08-2A: resolve secondary grouping dimension for multi-series charts.
+    _SERIES_DIMENSIONS: dict[str, Any] = {
+        "buyer": OperationalFact.buyer,
+        "unit": OperationalFact.unit,
+        "section": OperationalFact.operational_section,
+    }
+    series_col = _SERIES_DIMENSIONS.get(series_by) if series_by else None
+
+    select_columns = [
+        OperationalFact.report_date.label("report_date"),
+        func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("numeric_total"),
+        func.count(OperationalFact.id).label("fact_count"),
+        func.count(OperationalFact.value_numeric).label("numeric_count"),
+        func.array_agg(func.distinct(UploadedFile.original_filename)).label(
+            "workbook_names"
+        ),
+    ]
+    group_columns = [OperationalFact.report_date]
+    order_columns = [OperationalFact.report_date.desc()]
+
+    if series_col is not None:
+        select_columns.append(series_col.label("series"))
+        group_columns.append(series_col)
+        order_columns.append(series_col.asc())
+
     stmt = (
-        select(
-            OperationalFact.report_date.label("report_date"),
-            func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("numeric_total"),
-            func.count(OperationalFact.id).label("fact_count"),
-            func.count(OperationalFact.value_numeric).label("numeric_count"),
-            func.array_agg(func.distinct(UploadedFile.original_filename)).label(
-                "workbook_names"
-            ),
-        )
+        select(*select_columns)  # type: ignore[call-overload]
         .select_from(OperationalFact)
         .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
         .where(*clauses)
-        .group_by(OperationalFact.report_date)
-        .order_by(OperationalFact.report_date.desc())
+        .group_by(*group_columns)
+        .order_by(*order_columns)
         .limit(limit)
     )
     result = await session.execute(stmt)
     rows = [dict(row._mapping) for row in result.all()]
-    rows.reverse()  # ascending chronological order for trend rendering
+    # Sort ascending by date for trend rendering (secondary sort by series).
+    rows.sort(key=lambda r: (r["report_date"], r.get("series") or ""))
     return rows
 
 

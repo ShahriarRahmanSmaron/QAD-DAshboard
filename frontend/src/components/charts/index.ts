@@ -15,6 +15,12 @@ export { KpiCard } from "./kpi-card";
 export { ChartTooltip } from "./chart-tooltip";
 export { ChartDemo } from "./chart-demo";
 export { ChartBuilderPage } from "./chart-builder-page";
+// MD08-3A: date-aware dashboard components
+export { GroupedBarChart } from "./grouped-bar-chart";
+export { MultiSeriesTrend } from "./multi-series-trend";
+export { StackedAreaTrend } from "./stacked-area-trend";
+export { HeatmapChart } from "./heatmap-chart";
+export { DateComparisonView } from "./date-comparison-view";
 
 // Hooks
 export {
@@ -34,6 +40,14 @@ export {
   aggregationToMetricDistribution,
   comparisonToKpi,
   trendToSparkline,
+  // MD08-3A: date-aware adapters
+  formatShortDate,
+  trendDates,
+  trendToGroupedSeriesByDate,
+  trendToMultiSeries,
+  trendToHeatmap,
+  trendToDateComparison,
+  trendToLatestKpi,
 } from "./adapters";
 
 // Theme
@@ -54,4 +68,14 @@ export type {
   ChartConfig,
   DateRange,
   DateRangeValue,
+  // MD08-3A: date-aware dashboard types
+  DashboardComparisonMode,
+  GroupDimension,
+  StackMode,
+  GroupedSeriesPoint,
+  GroupedSeriesDataset,
+  HeatmapCell,
+  HeatmapDataset,
+  DateComparisonRow,
+  DateComparisonDataset,
 } from "./types";

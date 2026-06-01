@@ -21,9 +21,6 @@ import { listReportTypes } from "@/lib/reports/api";
 import { useOperationalDimensions } from "@/lib/reports/operational-hooks";
 import {
   getChartTimeSeries,
-  getChartGrouped,
-  getChartRankings,
-  getChartDistribution,
 } from "@/lib/charts/api";
 import { TrendChart } from "./trend-chart";
 import { ComparisonChart } from "./comparison-chart";
@@ -31,7 +28,7 @@ import { RankingChart } from "./ranking-chart";
 import { DistributionChart } from "./distribution-chart";
 import {
   trendToTimeSeries,
-  aggregationToGroupedTotals,
+  trendToGroupedByDate,
 } from "./adapters";
 import type { DateRange, DateRangeValue, TimeSeriesDataset, GroupedTotalsDataset } from "./types";
 import type {
@@ -158,39 +155,29 @@ export function ChartBuilderPage() {
         return { kind: "timeseries" as const, dataset };
       }
 
-      // Buyer/Unit/Section dimension → grouped/ranking/distribution
-      if (selectedChartType === "pie") {
-        const agg = await getChartDistribution({
-          distribute_by: selectedDimension as "buyer" | "unit" | "section",
-          metric: selectedMetric,
-          report_type_id: reportTypeParam,
-          ...dateParams,
-        });
-        const dataset = aggregationToGroupedTotals(agg, selectedDimension);
-        return { kind: "grouped" as const, dataset };
-      }
-
-      // Bar / Stacked Bar → rankings endpoint (sorted desc)
-      if (selectedChartType === "bar" || selectedChartType === "stacked-bar") {
-        const agg = await getChartRankings({
-          rank_by: selectedDimension as "buyer" | "unit" | "section",
-          metric: selectedMetric,
-          report_type_id: reportTypeParam,
-          ...dateParams,
-          limit: 15,
-        });
-        const dataset = aggregationToGroupedTotals(agg, selectedDimension);
-        return { kind: "grouped" as const, dataset };
-      }
-
-      // Line / Area / Stacked Area with non-date dimension → grouped totals
-      const agg = await getChartGrouped({
-        group_by: [selectedDimension],
+      // MD08-2A: All non-date dimensions use the time-series endpoint with
+      // series_by to preserve date grain. Each date remains a separate data
+      // point — values are never aggregated across dates.
+      const trend = await getChartTimeSeries({
         metric: selectedMetric,
         report_type_id: reportTypeParam,
+        series_by: selectedDimension as "buyer" | "unit" | "section",
         ...dateParams,
       });
-      const dataset = aggregationToGroupedTotals(agg, selectedDimension);
+
+      // For line/area/stacked-area → render as multi-series time-series
+      if (
+        selectedChartType === "line" ||
+        selectedChartType === "area" ||
+        selectedChartType === "stacked-area"
+      ) {
+        const dataset = trendToTimeSeries(trend, selectedMetric);
+        return { kind: "timeseries" as const, dataset };
+      }
+
+      // For bar/stacked-bar/pie → convert multi-series trend into grouped
+      // totals with date-qualified labels so each bar/slice is per-date.
+      const dataset = trendToGroupedByDate(trend, selectedDimension);
       return { kind: "grouped" as const, dataset };
     },
     enabled: canGenerate,
@@ -397,7 +384,7 @@ type ChartRendererProps = {
   dimension: DimensionOption;
 };
 
-function ChartRenderer({ kind, dataset, chartType, title, dimension }: ChartRendererProps) {
+function ChartRenderer({ kind, dataset, chartType, title }: ChartRendererProps) {
   if (kind === "timeseries") {
     const tsDataset = dataset as TimeSeriesDataset;
     const variant =
@@ -432,7 +419,7 @@ function ChartRenderer({ kind, dataset, chartType, title, dimension }: ChartRend
     <ComparisonChart
       data={groupedDataset}
       title={title}
-      variant={chartType === "stacked-bar" ? "stacked-bar" : "bar"}
+      variant="bar"
       height={400}
       maxItems={15}
     />

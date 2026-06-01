@@ -162,10 +162,14 @@ def classify_row(
 
     The label caption is authoritative: a row literally labelled "Grand Total"
     is ``grand_total``; "Previous Day" is ``previous_day``; "Sub Total" /
-    "Section Total" is ``subtotal``. A label-less aggregate (a formula or
-    rollup cell with no governing caption) is ``summary``. Everything else is a
-    ``detail`` leaf. Grand Total and Previous Day are deliberately separated so
-    aggregation never mixes them.
+    "Section Total" is ``subtotal``. A label-less aggregate (a rollup cell with
+    no governing caption) is ``summary``. Everything else is a ``detail`` leaf.
+    Grand Total and Previous Day are deliberately separated so aggregation never
+    mixes them.
+
+    Note (MD08-3A): ``is_formula`` alone does NOT trigger summary classification.
+    A formula-based buyer row is a detail fact. Only ``is_rollup`` (which is set
+    when the row has no buyer) triggers summary for unlabelled aggregates.
     """
     token = normalize_token(str(row_label)) if row_label else ""
     if token:
@@ -177,7 +181,7 @@ def classify_row(
             return CLASS_SUBTOTAL
         if any(marker in token for marker in _SUMMARY_MARKERS):
             return CLASS_SUMMARY
-    if is_rollup or is_formula:
+    if is_rollup:
         return CLASS_SUMMARY
     return CLASS_DETAIL
 

@@ -209,6 +209,9 @@ def _fact_is_rollup(fact: SemanticFact) -> bool:
     ownership = metadata.get("ownership")
     if isinstance(ownership, dict) and ownership.get("is_rollup"):
         return True
+    # A formula cell that has a buyer is a detail fact, not a rollup.
+    if fact.buyer:
+        return False
     return bool(fact.is_formula) or fact.calculated_state in {"formula", "calculated"}
 
 

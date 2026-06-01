@@ -820,7 +820,7 @@ class _OwnershipResolver:
                 if "rollup_row" not in reasons:
                     reasons.append("rollup_row")
 
-        if formula:
+        if formula and buyer is None:
             is_rollup = True
             if "rollup_row" not in reasons and "calculated_rollup" not in reasons:
                 reasons.append("calculated_rollup")

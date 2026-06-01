@@ -72,6 +72,8 @@ export type ChartTimeSeriesParams = {
   date_from?: string;
   date_to?: string;
   classification?: string;
+  /** MD08-2A: secondary grouping dimension for multi-series charts. */
+  series_by?: "buyer" | "unit" | "section";
   limit?: number;
 };
 

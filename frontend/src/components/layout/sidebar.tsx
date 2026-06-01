@@ -7,6 +7,7 @@ import {
   BarChart3,
   ClipboardCheck,
   Database,
+  FlaskConical,
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
@@ -40,6 +41,12 @@ const navigation = [
     label: "Chart Builder",
     href: "/reports/charts",
     icon: BarChart3,
+    roles: ["admin", "editor", "viewer"],
+  },
+  {
+    label: "WF Test Dashboard",
+    href: "/reports/wf-test",
+    icon: FlaskConical,
     roles: ["admin", "editor", "viewer"],
   },
   {

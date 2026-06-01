@@ -51,12 +51,18 @@ async def chart_time_series(
     date_from: date | None = None,
     date_to: date | None = None,
     classification: str | None = None,
+    series_by: Annotated[str | None, Query(pattern="^(buyer|unit|section)$")] = None,
     limit: Annotated[int, Query(ge=1, le=365)] = 180,
 ) -> OperationalTrendResponse:
     """Time series data for line/area charts.
 
     Reuses the operational trend query. Returns date-ordered points with
     numeric totals suitable for rendering as line, area, or stacked area charts.
+
+    MD08-2A: When ``series_by`` is supplied, the response includes one point
+    per (report_date, series_dimension) combination, enabling multi-series
+    charts (e.g. report_date + unit). The date grain is always preserved —
+    multiple dates are never aggregated into a single point.
     """
     rows = await repository.get_operational_trend(
         session,
@@ -69,6 +75,7 @@ async def chart_time_series(
         date_from=date_from,
         date_to=date_to,
         classification=classification,
+        series_by=series_by,
         limit=limit,
     )
     return serialize_operational_trend(
@@ -77,6 +84,7 @@ async def chart_time_series(
         unit=unit,
         operational_section=section,
         rows=rows,
+        series_by=series_by,
     )
 
 

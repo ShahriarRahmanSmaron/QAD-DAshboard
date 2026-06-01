@@ -222,6 +222,7 @@ def serialize_operational_trend(
     unit: str | None,
     operational_section: str | None,
     rows: list[dict[str, Any]],
+    series_by: str | None = None,
 ) -> OperationalTrendResponse:
     points = [
         OperationalTrendPoint(
@@ -234,6 +235,7 @@ def serialize_operational_trend(
                 for name in (row.get("workbook_names") or [])
                 if name
             ],
+            series=row.get("series"),
         )
         for row in rows
         if row.get("report_date") is not None
@@ -243,6 +245,7 @@ def serialize_operational_trend(
         buyer=buyer,
         unit=unit,
         operational_section=operational_section,
+        series_by=series_by,
         points=points,
         total=len(points),
     )

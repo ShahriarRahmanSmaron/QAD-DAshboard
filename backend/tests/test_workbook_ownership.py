@@ -215,3 +215,86 @@ def test_trust_targets_met_on_clean_workbook():
     assert ambiguous_share < 0.05
     assert unmapped_share < 0.05
     assert diagnostics["trust_ratio"] >= 0.95
+
+
+def test_formula_buyer_rows_classified_as_detail_not_subtotal():
+    """MD08-3A: formula-based buyer rows must be classified as detail.
+
+    When a buyer row's value originates from a formula (e.g. =E7+G7), the
+    ingestion engine must NOT classify it as a subtotal/rollup. It is a
+    buyer-level operational fact and must be treated as detail.
+    """
+    grid = {
+        (1, 2): "UNIT",
+        (1, 3): "BUYER",
+        (1, 4): "WAIT FOR TEST",
+        # Normal buyer rows (literal values)
+        (2, 2): "CCL-A",
+        (2, 3): "C&A Normal",
+        (2, 4): 4229,
+        (3, 2): "CCL-A",
+        (3, 3): "Hugo Boss",
+        (3, 4): 1976,
+        # Formula-based buyer rows — these must remain detail
+        (4, 2): "CCL-A",
+        (4, 3): "AC&A Normal",
+        # value is None because it's a formula cell
+        (5, 2): "CCL-A",
+        (5, 3): "H&M",
+    }
+    formulas = {
+        (4, 4): "=D2+100",  # formula-derived buyer value (simulating 5461)
+        (5, 4): "=D3+100",  # formula-derived buyer value (simulating 3764)
+    }
+    sheet = build_sheet(name="S", grid=grid, formulas=formulas)
+    extraction = extract_workbook_semantics(build_workbook(filename="x.xlsx", sheets=[sheet]))
+    cells = _facts_by_cell(extraction)
+
+    # Formula buyer rows must be marked as formula but NOT as rollup
+    d4 = cells["D4"]
+    assert d4.is_formula is True
+    assert d4.metadata["ownership"]["is_rollup"] is False
+    assert d4.row_classification == "detail"
+    assert d4.buyer is not None  # must have a buyer
+
+    d5 = cells["D5"]
+    assert d5.is_formula is True
+    assert d5.metadata["ownership"]["is_rollup"] is False
+    assert d5.row_classification == "detail"
+    assert d5.buyer is not None  # must have a buyer
+
+    # All four buyer rows (2 literal + 2 formula) must be counted as leaf facts
+    leaf_total = _leaf_total(extraction, metric_contains="Wait For Test")
+    # D2=4229, D3=1976, D4=4229+100=4329, D5=1976+100=2076
+    assert leaf_total == Decimal(4229 + 1976 + 4329 + 2076)
+
+
+def test_formula_without_buyer_still_classified_as_rollup():
+    """MD08-3A counterpart: formula rows WITHOUT a buyer remain rollups.
+
+    A formula cell in a row that has no buyer (e.g. a unit total SUM row)
+    must still be classified as a rollup/subtotal — only buyer-owned formula
+    rows get the detail treatment.
+    """
+    grid = {
+        (1, 2): "UNIT",
+        (1, 3): "BUYER",
+        (1, 4): "WAIT FOR TEST",
+        (2, 2): "CCL-A",
+        (2, 3): "C&A Normal",
+        (2, 4): 4229,
+        (3, 2): "CCL-A",
+        (3, 3): "Hugo Boss",
+        (3, 4): 1976,
+        # Row 4: no buyer → this is a unit total row with a formula
+    }
+    formulas = {(4, 4): "=SUM(D2:D3)"}
+    sheet = build_sheet(name="S", grid=grid, formulas=formulas)
+    extraction = extract_workbook_semantics(build_workbook(filename="x.xlsx", sheets=[sheet]))
+    cells = _facts_by_cell(extraction)
+
+    d4 = cells["D4"]
+    assert d4.is_formula is True
+    assert d4.metadata["ownership"]["is_rollup"] is True
+    # Must NOT be counted as a leaf fact
+    assert _leaf_total(extraction, metric_contains="Wait For Test") == Decimal(4229 + 1976)

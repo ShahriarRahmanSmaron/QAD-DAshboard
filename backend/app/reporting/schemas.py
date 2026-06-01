@@ -440,6 +440,8 @@ class OperationalTrendPoint(BaseModel):
     numeric_count: int = 0
     # MD07-3 Phase 4: source workbook(s) feeding this trend point.
     workbook_names: list[str] = Field(default_factory=list)
+    # MD08-2A: secondary dimension value for multi-series charts.
+    series: str | None = None
 
 
 class OperationalTrendResponse(BaseModel):
@@ -447,6 +449,8 @@ class OperationalTrendResponse(BaseModel):
     buyer: str | None = None
     unit: str | None = None
     operational_section: str | None = None
+    # MD08-2A: secondary grouping dimension when multi-series is requested.
+    series_by: str | None = None
     points: list[OperationalTrendPoint] = Field(default_factory=list)
     total: int = 0
 

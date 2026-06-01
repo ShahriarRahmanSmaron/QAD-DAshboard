@@ -328,6 +328,8 @@ export type OperationalTrendPoint = {
   fact_count: number;
   numeric_count: number;
   workbook_names?: string[];
+  /** MD08-2A: secondary dimension value for multi-series charts. */
+  series?: string | null;
 };
 
 export type OperationalTrendResponse = {
@@ -335,6 +337,8 @@ export type OperationalTrendResponse = {
   buyer: string | null;
   unit: string | null;
   operational_section: string | null;
+  /** MD08-2A: secondary grouping dimension when multi-series is requested. */
+  series_by?: string | null;
   points: OperationalTrendPoint[];
   total: number;
 };
