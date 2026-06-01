@@ -214,6 +214,7 @@ export type ReportTypeOption = {
   description: string | null;
   version: number;
   is_active: boolean;
+  active_workbooks: number;
 };
 
 export type BuyerListResponse = {

@@ -1439,6 +1439,9 @@ export function WorkbookUploadPanel() {
     // Keep the inventory / active-sources / operational views in sync.
     void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
     void queryClient.invalidateQueries({ queryKey: ["operations"] });
+    // MD07-5 Phase 5: a new workbook may introduce a new report type, so the
+    // dynamic report-type registry must refresh immediately.
+    void queryClient.invalidateQueries({ queryKey: ["report-types"] });
   }
 
   async function handleReplaceExisting() {

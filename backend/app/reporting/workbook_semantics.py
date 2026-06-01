@@ -36,6 +36,8 @@ from app.reporting.workbook_normalization import (
     CONFIDENCE_UNMAPPED,
     MappingConfidence,
     classify_row,
+    derive_report_type_code,
+    derive_report_type_name,
     is_composite_label,
     normalize_report_date,
     slugify,
@@ -999,12 +1001,54 @@ async def persist_workbook_semantics(
         uploaded_file_id=uploaded_file.id,
         facts=facts,
     )
+    await assign_workbook_report_type(
+        session,
+        uploaded_file=uploaded_file,
+        workbook_metadata=workbook_metadata,
+    )
     uploaded_file.metadata_ = {
         **workbook_metadata,
         "semantic_mapping": extraction.semantic_mapping,
     }
     await session.flush()
     return extraction
+
+
+async def assign_workbook_report_type(
+    session: AsyncSession,
+    *,
+    uploaded_file: UploadedFile,
+    workbook_metadata: JsonObject,
+) -> None:
+    """Classify and assign the workbook's report type at ingestion (MD07-5 §5).
+
+    The report type is derived from the workbook filename (the report *kind*,
+    independent of the report date) and resolved against the dynamic report-type
+    registry, creating the registry entry on first sight. This is what makes the
+    platform self-extending: a brand-new workbook kind produces a brand-new
+    report type with zero code changes. Filenames are only used at ingestion to
+    establish the stored classification — query time never infers from
+    filenames.
+
+    Re-runs (rebuild) keep an already-assigned report type stable unless the
+    filename now resolves to a different kind, in which case the workbook is
+    re-pointed to the correct (possibly new) registry entry.
+    """
+    filename = str(workbook_metadata.get("filename") or uploaded_file.original_filename or "")
+    report_type_name = derive_report_type_name(filename)
+    report_type_code = derive_report_type_code(report_type_name)
+    if not report_type_name or not report_type_code:
+        # Nothing meaningful to classify (e.g. a date-only filename). Leave the
+        # workbook unclassified rather than inventing a report type.
+        return
+
+    report_type = await repository.get_or_create_report_type_for_workbook(
+        session,
+        name=report_type_name,
+        code=report_type_code,
+    )
+    if uploaded_file.report_type_id != report_type.id:
+        uploaded_file.report_type_id = report_type.id
 
 
 async def rebuild_workbook_semantics(

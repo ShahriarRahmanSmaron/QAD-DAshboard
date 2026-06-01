@@ -91,6 +91,11 @@ export function WorkbookInventoryPanel({ isAdmin = false }: Props) {
   function invalidateGovernance() {
     void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
     void queryClient.invalidateQueries({ queryKey: ["operations"] });
+    // MD07-5 Phase 5: archive / restore / delete / activate changes the set of
+    // active workbook sources, so the dynamic report-type registry must refresh
+    // (a report type disappears when its last active workbook does, and returns
+    // when restored).
+    void queryClient.invalidateQueries({ queryKey: ["report-types"] });
   }
 
   async function runAction(

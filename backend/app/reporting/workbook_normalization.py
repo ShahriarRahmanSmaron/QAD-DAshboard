@@ -312,6 +312,145 @@ def normalize_unit_label(value: str | None) -> str | None:
     return text.upper()
 
 
+# ---------------------------------------------------------------------------
+# Report type derivation (MD07-5 Phase 5: dynamic report type registry)
+# ---------------------------------------------------------------------------
+
+# Date tokens that appear in workbook filenames (e.g. ``WF-Test-and-shade-19-may``
+# or ``WIP-STOCK-23-05-2026``). Stripping these yields the stable report-type
+# identity so the same report kind uploaded for different dates collapses to one
+# report type. These are structural date captions, not business vocabulary.
+_MONTH_NAME_TOKENS: frozenset[str] = frozenset(
+    {
+        "jan",
+        "january",
+        "feb",
+        "february",
+        "mar",
+        "march",
+        "apr",
+        "april",
+        "may",
+        "jun",
+        "june",
+        "jul",
+        "july",
+        "aug",
+        "august",
+        "sep",
+        "sept",
+        "september",
+        "oct",
+        "october",
+        "nov",
+        "november",
+        "dec",
+        "december",
+    }
+)
+
+# Generic suffix words operational filenames append to the report kind. Removing
+# them keeps the report-type name focused on the kind itself, e.g.
+# ``"WIP Stock Report"`` → ``"WIP Stock"``. Purely structural, not business
+# vocabulary.
+_REPORT_NAME_NOISE_TOKENS: frozenset[str] = frozenset(
+    {
+        "report",
+        "reports",
+        "summary",
+        "sheet",
+        "workbook",
+        "final",
+        "copy",
+        "updated",
+        "new",
+        "v",
+        "ver",
+        "version",
+        "rev",
+        "draft",
+    }
+)
+
+_FILE_EXT_RE = re.compile(r"\.[A-Za-z0-9]+$")
+_WORD_RE = re.compile(r"[A-Za-z]+")
+# Version markers operational filenames append (``v2``, ``rev3``, ``ver10``).
+_VERSION_TOKEN_RE = re.compile(r"^(?:v|ver|rev|version)\d+$", re.IGNORECASE)
+
+
+def _strip_extension(filename: str) -> str:
+    return _FILE_EXT_RE.sub("", filename)
+
+
+def _is_date_token(token: str) -> bool:
+    """``True`` when a filename token is a date fragment (day, month, year)."""
+    lowered = token.lower()
+    if lowered in _MONTH_NAME_TOKENS:
+        return True
+    if token.isdigit():
+        # Day (1-31), month (1-12) or year (e.g. 2026 / 26) fragments.
+        return True
+    return False
+
+
+def _is_noise_token(token: str) -> bool:
+    """``True`` for generic suffix/version words that aren't part of the kind."""
+    lowered = token.lower()
+    if lowered in _REPORT_NAME_NOISE_TOKENS:
+        return True
+    return bool(_VERSION_TOKEN_RE.match(token))
+
+
+def derive_report_type_name(filename: str | None) -> str | None:
+    """Derive a stable, human report-type name from a workbook filename.
+
+    The identity is the report *kind*, independent of the date the workbook
+    covers, so ``WF-Test-and-shade-19-may.xlsx`` and
+    ``WF-Test-and-shade-20-May.xlsx`` both yield ``"WF Test And Shade"`` and
+    ``WIP-STOCK-23-05-2026.xlsx`` yields ``"WIP Stock"``.
+
+    Returns ``None`` when no alphabetic tokens remain (e.g. a purely numeric or
+    date-only filename) so the caller can leave the workbook unclassified
+    rather than inventing a meaningless report type.
+    """
+    if not filename:
+        return None
+    stem = _strip_extension(str(filename))
+    # Split on any non-alphanumeric run so ``-``, ``_``, spaces, and ``.`` all
+    # act as separators.
+    raw_tokens = [tok for tok in re.split(r"[^A-Za-z0-9]+", stem) if tok]
+    kept: list[str] = []
+    for token in raw_tokens:
+        if _is_date_token(token):
+            continue
+        if _is_noise_token(token):
+            continue
+        # Drop tokens with no letters (stray numeric fragments not caught above).
+        if not _WORD_RE.search(token):
+            continue
+        kept.append(token)
+    if not kept:
+        return None
+    # Canonicalize: preserve all-caps short acronyms (WF, WIP, RFT, GSM…),
+    # title-case longer words. Keeps a stable, readable display name.
+    parts = [tok.upper() if len(tok) <= 3 and tok.isupper() else tok.title() for tok in kept]
+    return collapse_whitespace(" ".join(parts)) or None
+
+
+def derive_report_type_code(report_type_name: str | None) -> str | None:
+    """Stable upper-snake code for a report type name (e.g. ``WF_TEST_AND_SHADE``).
+
+    Used as the case-insensitive identity key when getting-or-creating the
+    ``report_types`` row so the same report kind never spawns duplicates.
+    """
+    if not report_type_name:
+        return None
+    token = normalize_token(report_type_name)
+    if not token:
+        return None
+    return token.replace(" ", "_").upper()
+
+
 def normalize_unit(value: str | None) -> str | None:
     """Backward-compatible unit search: find a ``PREFIX-NN`` code in free text.
 

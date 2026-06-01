@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import {
   getAdminBackendUrl,
   getAdminHeaders,
@@ -5,14 +6,14 @@ import {
   unauthorizedResponse,
 } from "@/app/api/admin/_utils";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const headers = await getAdminHeaders();
   if (!headers) {
     return unauthorizedResponse();
   }
 
   const response = await fetch(
-    getAdminBackendUrl("/api/v1/reports/operations/dimensions"),
+    getAdminBackendUrl(`/api/v1/reports/operations/dimensions${request.nextUrl.search}`),
     {
       headers,
       cache: "no-store",

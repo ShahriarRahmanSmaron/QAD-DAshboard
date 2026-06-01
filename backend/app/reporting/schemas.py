@@ -777,3 +777,28 @@ class UnitListResponse(BaseModel):
 
 class ReportTypeListResponse(BaseModel):
     report_types: list[ReportTypeOption]
+
+
+class ReportTypeOptionWithCounts(BaseModel):
+    """Report type option with its active-workbook count (MD07-5 Phase 5).
+
+    The dynamic report-type registry only emits report types backed by at least
+    one active, non-archived workbook, and reports how many active workbooks
+    contribute to each so the UI can surface the count.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    code: str
+    name: str
+    description: str | None
+    version: int
+    is_active: bool
+    active_workbooks: int
+
+
+class ReportTypeListFlatResponse(BaseModel):
+    """Dynamic report-type registry response with active workbook counts."""
+
+    report_types: list[ReportTypeOptionWithCounts]

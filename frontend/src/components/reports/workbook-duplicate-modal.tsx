@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, FileSpreadsheet, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { WorkbookDuplicateInfo } from "@/lib/reports/types";
@@ -36,11 +38,19 @@ function formatDateTime(value: string | null | undefined) {
  * Replace (deactivate the old version, activate the new one) or Cancel.
  */
 export function WorkbookDuplicateModal({ info, isReplacing, onReplace, onCancel }: Props) {
-  if (!info) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!info || !mounted) {
     return null;
   }
 
-  return (
+  // Render in a portal on document.body so the fixed overlay is positioned
+  // against the viewport, not an ancestor with backdrop-blur/transform (which
+  // would clip the footer buttons).
+  return createPortal(
     <div
       aria-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4 backdrop-blur-sm"
@@ -92,6 +102,7 @@ export function WorkbookDuplicateModal({ info, isReplacing, onReplace, onCancel 
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

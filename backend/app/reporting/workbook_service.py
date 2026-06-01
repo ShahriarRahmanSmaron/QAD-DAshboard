@@ -17,6 +17,10 @@ from app.reporting.schemas import (
     WorkbookParsePreview,
     WorkbookUploadResponse,
 )
+from app.reporting.workbook_normalization import (
+    derive_report_type_code,
+    derive_report_type_name,
+)
 from app.reporting.workbook_parser import parse_xlsx_workbook
 from app.reporting.workbook_semantics import (
     extract_workbook_report_date,
@@ -110,13 +114,26 @@ async def save_and_parse_workbook_upload(
     # the caller has not opted to replace it, abort with DUPLICATE_WORKBOOK so
     # the UI can show the replace/cancel modal. The just-written temp file is
     # removed so we never leave an orphan blob behind.
+    #
+    # MD07-5 Phase 5: the report type is derived from the filename and resolved
+    # against the dynamic registry up-front so the duplicate identity matches the
+    # classification the workbook will be stored with.
     report_date = extract_workbook_report_date(workbook_metadata)
+    report_type_name = derive_report_type_name(safe_filename)
+    report_type_code = derive_report_type_code(report_type_name)
+    duplicate_report_type_id: UUID | None = None
+    if report_type_code:
+        existing_report_type = await repository.find_report_type_by_code(
+            session, code=report_type_code
+        )
+        if existing_report_type is not None:
+            duplicate_report_type_id = existing_report_type.id
     duplicate = await repository.find_active_duplicate_workbook(
         session,
         user=actor,
         filename=safe_filename,
         report_date=report_date,
-        report_type_id=None,
+        report_type_id=duplicate_report_type_id,
     )
     replaced_workbook_id: UUID | None = None
     if duplicate is not None and not replace_existing:

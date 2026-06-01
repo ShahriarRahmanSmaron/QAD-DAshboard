@@ -64,6 +64,77 @@ async def active_unit_exists(session: AsyncSession, unit_id: UUID) -> bool:
     return result.scalar_one_or_none() is not None
 
 
+async def find_report_type_by_code(
+    session: AsyncSession,
+    *,
+    code: str,
+) -> ReportType | None:
+    """Look up an existing (non-deleted) report type by case-insensitive code.
+
+    Used by the duplicate-upload guard to resolve the workbook's report type
+    *before* facts are persisted, so duplicate identity ``(filename,
+    report_date, report_type)`` matches the stored classification. Returns
+    ``None`` when the report type does not exist yet (first upload of this kind).
+    """
+    return (
+        await session.execute(
+            select(ReportType)
+            .where(
+                func.lower(ReportType.code) == code.lower(),
+                ReportType.deleted_at.is_(None),
+            )
+            .order_by(ReportType.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def get_or_create_report_type_for_workbook(
+    session: AsyncSession,
+    *,
+    name: str,
+    code: str,
+) -> ReportType:
+    """Return the report type for ``code``, creating it if it does not exist.
+
+    MD07-5 Phase 5: report types are derived from active workbook sources at
+    ingestion rather than seeded. The identity key is ``code`` (case-insensitive,
+    matching the partial unique index on ``report_types``) so the same report
+    kind never spawns duplicates across uploads. A previously soft-deleted or
+    deactivated report type for the same code is revived so a re-upload restores
+    its registry entry without creating a second row.
+    """
+    existing = (
+        await session.execute(
+            select(ReportType)
+            .where(
+                func.lower(ReportType.code) == code.lower(),
+                ReportType.deleted_at.is_(None),
+            )
+            .order_by(ReportType.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if existing is not None:
+        # Revive a deactivated report type so its workbook contributes again.
+        if not existing.is_active:
+            existing.is_active = True
+        return existing
+
+    report_type = ReportType(
+        code=code,
+        name=name,
+        description=None,
+        version=1,
+        is_active=True,
+        metric_schema={},
+    )
+    session.add(report_type)
+    await session.flush()
+    return report_type
+
+
 async def active_report_type_exists(session: AsyncSession, report_type_id: UUID) -> bool:
     result = await session.execute(
         select(ReportType.id).where(
@@ -1204,13 +1275,60 @@ async def list_active_units(session: AsyncSession) -> list[Unit]:
     return list(result.scalars().all())
 
 
-async def list_active_report_types(session: AsyncSession) -> list[ReportType]:
+async def list_report_types_with_workbook_counts(session: AsyncSession) -> list[dict[str, Any]]:
+    """Return report types backed by active workbooks, with their counts.
+
+    MD07-5 Phase 5: the dynamic report-type registry. Only report types
+    represented by at least one active, non-archived, processed workbook are
+    returned (inner join), so a report type disappears the moment its last
+    active workbook is deleted, archived, or deactivated, and reappears when one
+    is restored or uploaded. No hardcoded, seeded, or template report types ever
+    surface here.
+    """
+    workbook_counts = (
+        select(
+            UploadedFile.report_type_id,
+            func.count(UploadedFile.id).label("active_workbooks"),
+        )
+        .where(
+            UploadedFile.deleted_at.is_(None),
+            UploadedFile.is_active_workbook.is_(True),
+            UploadedFile.archived_at.is_(None),
+            UploadedFile.status == "processed",
+            UploadedFile.report_type_id.is_not(None),
+        )
+        .group_by(UploadedFile.report_type_id)
+        .subquery()
+    )
+
+    # Inner join: only report types with active workbooks are emitted.
     result = await session.execute(
-        select(ReportType)
-        .where(ReportType.deleted_at.is_(None), ReportType.is_active.is_(True))
+        select(
+            ReportType,
+            workbook_counts.c.active_workbooks.label("active_workbooks"),
+        )
+        .join(
+            workbook_counts,
+            ReportType.id == workbook_counts.c.report_type_id,
+        )
+        .where(
+            ReportType.deleted_at.is_(None),
+            ReportType.is_active.is_(True),
+        )
         .order_by(ReportType.name, ReportType.version)
     )
-    return list(result.scalars().all())
+
+    report_types_with_counts = []
+    for row in result.all():
+        report_type, active_workbooks = row
+        report_types_with_counts.append(
+            {
+                "report_type": report_type,
+                "active_workbooks": active_workbooks or 0,
+            }
+        )
+
+    return report_types_with_counts
 
 
 async def validate_references_exist(

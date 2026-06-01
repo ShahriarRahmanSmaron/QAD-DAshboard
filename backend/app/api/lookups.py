@@ -11,8 +11,8 @@ from app.reporting import repository
 from app.reporting.schemas import (
     BuyerListResponse,
     BuyerOption,
-    ReportTypeListResponse,
-    ReportTypeOption,
+    ReportTypeListFlatResponse,
+    ReportTypeOptionWithCounts,
     UnitListResponse,
     UnitOption,
 )
@@ -34,9 +34,30 @@ async def list_units(session: SessionDep, _user: ReaderDep) -> UnitListResponse:
     return UnitListResponse(units=[UnitOption.model_validate(unit) for unit in units])
 
 
-@router.get("/report-types", response_model=ReportTypeListResponse)
-async def list_report_types(session: SessionDep, _user: ReaderDep) -> ReportTypeListResponse:
-    report_types = await repository.list_active_report_types(session)
-    return ReportTypeListResponse(
-        report_types=[ReportTypeOption.model_validate(report_type) for report_type in report_types]
+@router.get("/report-types", response_model=ReportTypeListFlatResponse)
+async def list_report_types(session: SessionDep, _user: ReaderDep) -> ReportTypeListFlatResponse:
+    """Dynamic report-type registry (MD07-5 Phase 5).
+
+    Report types are generated from active workbook sources — never from
+    hardcoded constants, seeded templates, or report definitions. Only report
+    types backed by at least one active, non-archived, processed workbook are
+    returned, each with its active-workbook count. Deleting, archiving, or
+    deactivating the last workbook of a kind removes it here immediately;
+    restoring or uploading one makes it reappear, with zero code changes for new
+    workbook kinds.
+    """
+    report_types_with_counts = await repository.list_report_types_with_workbook_counts(session)
+    return ReportTypeListFlatResponse(
+        report_types=[
+            ReportTypeOptionWithCounts(
+                id=item["report_type"].id,
+                code=item["report_type"].code,
+                name=item["report_type"].name,
+                description=item["report_type"].description,
+                version=item["report_type"].version,
+                is_active=item["report_type"].is_active,
+                active_workbooks=item["active_workbooks"],
+            )
+            for item in report_types_with_counts
+        ]
     )
