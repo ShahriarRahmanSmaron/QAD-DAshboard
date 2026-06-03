@@ -228,9 +228,7 @@ export function BuyerComparisonView({
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               onClick={(data: any) => {
                 const buyerName = data?.buyer || data?.payload?.buyer;
-                if (buyerName && onBuyerClick) {
-                  onBuyerClick(buyerName);
-                }
+                if (buyerName) onBuyerClick?.(buyerName);
               }}
               className="cursor-pointer hover:opacity-85 transition-opacity"
             />
@@ -242,9 +240,7 @@ export function BuyerComparisonView({
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               onClick={(data: any) => {
                 const buyerName = data?.buyer || data?.payload?.buyer;
-                if (buyerName && onBuyerClick) {
-                  onBuyerClick(buyerName);
-                }
+                if (buyerName) onBuyerClick?.(buyerName);
               }}
               className="cursor-pointer hover:opacity-85 transition-opacity"
             />

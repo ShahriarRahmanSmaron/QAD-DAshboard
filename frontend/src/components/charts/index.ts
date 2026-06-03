@@ -22,6 +22,9 @@ export { MultiSeriesTrend } from "./multi-series-trend";
 export { StackedAreaTrend } from "./stacked-area-trend";
 export { HeatmapChart } from "./heatmap-chart";
 export { DateComparisonView } from "./date-comparison-view";
+export { UnitExplorer } from "./unit-explorer";
+export { BuyerExplorer } from "./buyer-explorer";
+export { BuyerComparisonView } from "./buyer-comparison-view";
 
 // Hooks
 export {

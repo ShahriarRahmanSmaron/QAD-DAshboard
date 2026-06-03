@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * @deprecated Use `UnitExplorer` instead. Kept temporarily to avoid breaking existing click handlers.
+ * To be removed in a later release after `UnitExplorer` is fully verified.
+ */
+
 import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { X, ArrowUpDown, ArrowUp, ArrowDown, Loader2 } from "lucide-react";

@@ -38,7 +38,6 @@ import { GroupedBarChart } from "@/components/charts/grouped-bar-chart";
 import { MultiSeriesTrend } from "@/components/charts/multi-series-trend";
 import { StackedAreaTrend } from "@/components/charts/stacked-area-trend";
 import { HeatmapChart } from "@/components/charts/heatmap-chart";
-import { DateComparisonView } from "@/components/charts/date-comparison-view";
 import { KpiCard } from "@/components/charts/kpi-card";
 import type { OperationalTrendResponse } from "@/lib/reports/types";
 import type { AuthUser } from "@/lib/auth/types";
@@ -46,7 +45,6 @@ import {
   DashboardControls,
   type DashboardControlsState,
 } from "./dashboard-controls";
-import { BuyerExplorer } from "./buyer-explorer";
 import {
   GROUP_DIMENSION_OPTIONS,
   datesInWindow,
@@ -56,8 +54,9 @@ import {
 
 // Optimized Components
 import { UnitPerformanceMatrix } from "@/components/charts/unit-performance-matrix";
-import { UnitDrilldownModal } from "@/components/charts/unit-drilldown-modal";
 import { BuyerComparisonView } from "@/components/charts/buyer-comparison-view";
+import { UnitExplorer } from "@/components/charts/unit-explorer";
+import { BuyerExplorer } from "@/components/charts/buyer-explorer";
 
 const STALE_TIME = 30_000;
 const TOP_N = 8;
@@ -95,8 +94,17 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
   });
   const dashboardRef = useRef<HTMLDivElement>(null);
   const [timestamp, setTimestamp] = useState("");
-  const [drilldownUnit, setDrilldownUnit] = useState<string | null>(null);
-  const [activeExplorerBuyer, setActiveExplorerBuyer] = useState("");
+  // Explorer States
+  const [explorerUnit, setExplorerUnit] = useState<string | null>(null);
+  const [explorerBuyer, setExplorerBuyer] = useState<string | null>(null);
+  
+  // Collapse/Expand States (default collapsed)
+  const [unitExplorerExpanded, setUnitExplorerExpanded] = useState(false);
+  const [buyerExplorerExpanded, setBuyerExplorerExpanded] = useState(false);
+
+  const unitExplorerRef = useRef<HTMLDivElement>(null);
+  const buyerExplorerRef = useRef<HTMLDivElement>(null);
+
   const [unitHistoricalControls, setUnitHistoricalControls] = useState({
     vizMode: "bars" as "bars" | "lines",
     userSelectedVizMode: null as "bars" | "lines" | null,
@@ -105,19 +113,32 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     dateScope: "full" as "full" | "comparison",
   });
 
-  function selectExplorerBuyer(buyer: string) {
-    setActiveExplorerBuyer(buyer);
-    setTimeout(() => {
-      const element = document.getElementById("buyer-explorer-section");
-      if (element) {
-        element.scrollIntoView({ behavior: "smooth" });
-      }
-    }, 100);
-  }
+  const setDrilldownUnit = handleUnitClick;
+  const selectExplorerBuyer = handleBuyerClick;
 
   useEffect(() => {
     setTimestamp(new Date().toLocaleString());
   }, []);
+
+  function handleUnitClick(unit: string) {
+    setExplorerUnit(unit);
+    setUnitExplorerExpanded(true);
+    setTimeout(() => {
+      if (unitExplorerRef.current) {
+        unitExplorerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 100);
+  }
+
+  function handleBuyerClick(buyer: string) {
+    setExplorerBuyer(buyer);
+    setBuyerExplorerExpanded(true);
+    setTimeout(() => {
+      if (buyerExplorerRef.current) {
+        buyerExplorerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 100);
+  }
 
   function patch(p: Partial<DashboardControlsState>) {
     setState((prev) => ({ ...prev, ...p }));
@@ -216,6 +237,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     () => datesInWindow(availableDates, dateWindow),
     [availableDates, dateWindow],
   );
+
 
   const effectiveDates = useMemo(
     () => {
@@ -364,17 +386,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     return trendToHeatmap(groupedTrend, { selectedDates: displayDates, topN: TOP_N });
   }, [groupedTrend, displayDates]);
 
-  const comparisonDataset = useMemo(() => {
-    if (!groupedTrend || !comparisonPair.current || !comparisonPair.previous) {
-      return null;
-    }
-    return trendToDateComparison(
-      groupedTrend,
-      comparisonPair.current,
-      comparisonPair.previous,
-      { topN: 20 },
-    );
-  }, [groupedTrend, comparisonPair]);
+  // comparisonDataset was removed since we no longer use DateComparisonView
 
   // Locked unit comparison dataset for Executive Summary and Matrix
   const unitComparisonDataset = useMemo(() => {
@@ -388,6 +400,41 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
       { topN: 0 } // Get all units
     );
   }, [unitTrendQuery.data, comparisonPair]);
+
+  const availableUnits = useMemo(() => {
+    return unitComparisonDataset?.rows.map((r) => ({
+      value: r.key,
+      label: r.label,
+    })) ?? [];
+  }, [unitComparisonDataset]);
+
+  const availableBuyers = useMemo(() => {
+    if (!buyerTrendQuery.data) return [];
+    const buyers = new Set<string>();
+    for (const pt of buyerTrendQuery.data.points) {
+      if (pt.series) buyers.add(pt.series);
+    }
+    return Array.from(buyers).map((b) => ({ value: b, label: b }));
+  }, [buyerTrendQuery.data]);
+
+  // Explorer Selection Persistence Hooks
+  useEffect(() => {
+    if (explorerUnit && availableUnits.length > 0) {
+      const exists = availableUnits.some((u) => u.value === explorerUnit);
+      if (!exists) {
+        setExplorerUnit(null);
+      }
+    }
+  }, [availableUnits, explorerUnit]);
+
+  useEffect(() => {
+    if (explorerBuyer && availableBuyers.length > 0) {
+      const exists = availableBuyers.some((b) => b.value === explorerBuyer);
+      if (!exists) {
+        setExplorerBuyer(null);
+      }
+    }
+  }, [availableBuyers, explorerBuyer]);
 
   // Executive summary stats
   const tStockKpi = useMemo(() => {
@@ -462,14 +509,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     return [...increases, ...reductions, ...stable];
   }, [unitComparisonDataset]);
 
-  // movers list for Section 6
-  const moversData = useMemo(() => {
-    if (!comparisonDataset) return { increases: [], reductions: [] };
-    const rows = comparisonDataset.rows;
-    const increases = rows.filter((r) => r.difference > 0).sort((a, b) => b.difference - a.difference).slice(0, 5);
-    const reductions = rows.filter((r) => r.difference < 0).sort((a, b) => a.difference - b.difference).slice(0, 5);
-    return { increases, reductions };
-  }, [comparisonDataset]);
+  // Movers list calculation has been moved inside UnitExplorer where it is needed.
 
   // ---------------------------------------------------------------------------
   // Unit Historical Comparison calculations & filters
@@ -1160,15 +1200,72 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
               )}
             </section>
 
+            {/* Unit Explorer Section */}
+            <section ref={unitExplorerRef} className="scroll-mt-6">
+              <details
+                open={unitExplorerExpanded}
+                onToggle={(e) => setUnitExplorerExpanded(e.currentTarget.open)}
+                className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
+              >
+                <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
+                  <div className="flex flex-col">
+                    <span className="text-base font-bold">Unit Explorer</span>
+                    <span className="text-xs text-muted-foreground font-normal">Detailed investigation of unit performance</span>
+                  </div>
+                  <span className="ml-4 transition-transform duration-200 group-open:rotate-180 text-muted-foreground">
+                    ▼
+                  </span>
+                </summary>
+                <div className="px-4 pt-2 border-t border-border mt-2">
+                  <UnitExplorer
+                    selectedUnit={explorerUnit}
+                    onUnitChange={setExplorerUnit}
+                    availableUnits={availableUnits}
+                    metric={state.metric}
+                    metricLabel={metricLabel}
+                    reportTypeId={state.reportTypeId}
+                    dateWindow={dateWindow}
+                    latestDate={comparisonPair.current!}
+                    previousDate={comparisonPair.previous}
+                    formatValue={formatValue}
+                    onBuyerClick={handleBuyerClick}
+                  />
+                </div>
+              </details>
+            </section>
+
             {/* Buyer Explorer Section */}
-            <section>
-              <BuyerExplorer
-                initialBuyer={activeExplorerBuyer}
-                availableBuyers={dimensionsQuery.data?.buyers ?? []}
-                availableMetrics={dimensionsQuery.data?.metrics ?? []}
-                availableDates={availableDates}
-                onBuyerChange={setActiveExplorerBuyer}
-              />
+            <section ref={buyerExplorerRef} className="scroll-mt-6">
+              <details
+                open={buyerExplorerExpanded}
+                onToggle={(e) => setBuyerExplorerExpanded(e.currentTarget.open)}
+                className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
+              >
+                <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
+                  <div className="flex flex-col">
+                    <span className="text-base font-bold">Buyer Explorer</span>
+                    <span className="text-xs text-muted-foreground font-normal">Detailed investigation of buyer performance</span>
+                  </div>
+                  <span className="ml-4 transition-transform duration-200 group-open:rotate-180 text-muted-foreground">
+                    ▼
+                  </span>
+                </summary>
+                <div className="px-4 pt-2 border-t border-border mt-2">
+                  <BuyerExplorer
+                    selectedBuyer={explorerBuyer}
+                    onBuyerChange={setExplorerBuyer}
+                    onUnitClick={handleUnitClick}
+                    availableBuyers={availableBuyers}
+                    metric={state.metric}
+                    metricLabel={metricLabel}
+                    reportTypeId={state.reportTypeId}
+                    dateWindow={dateWindow}
+                    latestDate={comparisonPair.current!}
+                    previousDate={comparisonPair.previous}
+                    formatValue={formatValue}
+                  />
+                </div>
+              </details>
             </section>
 
             {/* Buyer Analysis Section */}
@@ -1180,7 +1277,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                   previousDate={comparisonPair.previous}
                   formatValue={formatValue}
                   title="Buyer Analysis"
-                  onBuyerClick={selectExplorerBuyer}
+                  onBuyerClick={handleBuyerClick}
                 />
               )}
             </section>
@@ -1190,9 +1287,9 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
               {unitComparisonDataset ? (
                 <UnitPerformanceMatrix
                   data={unitComparisonDataset}
-                  onUnitClick={(unit) => setDrilldownUnit(unit)}
+                  onUnitClick={handleUnitClick}
                   formatValue={formatValue}
-                  title="Unit Analysis"
+                  title="Unit Analysis (Candidate for removal in MD09-4)"
                 />
               ) : (
                 <div className="h-[200px] flex items-center justify-center rounded-lg border border-dashed border-border bg-card/50">
@@ -1201,182 +1298,48 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
               )}
             </section>
 
-            {/* Phase 6: Top Movers Section */}
-            <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Table 1: Largest Increases */}
-              <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
-                <h3 className="text-sm font-semibold text-foreground mb-3 text-red-600 dark:text-red-400">
-                  Largest Increases (Top 5 {groupLabel(dim)}s)
-                </h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-border text-left uppercase text-muted-foreground">
-                        <th className="px-3 py-2 font-semibold">Entity</th>
-                        <th className="px-3 py-2 text-right font-semibold">Previous</th>
-                        <th className="px-3 py-2 text-right font-semibold">Current</th>
-                        <th className="px-3 py-2 text-right font-semibold">Delta</th>
-                        <th className="px-3 py-2 text-right font-semibold">%</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {moversData.increases.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="px-3 py-4 text-center text-muted-foreground italic">
-                            No increases detected.
-                          </td>
-                        </tr>
-                      ) : (
-                        moversData.increases.map((row) => (
-                          <tr
-                            key={row.key}
-                            onClick={() => {
-                              if (dim === "unit") {
-                                setDrilldownUnit(row.label);
-                              } else if (dim === "buyer") {
-                                selectExplorerBuyer(row.label);
-                              }
-                            }}
-                            className={`border-b border-border/50 last:border-0 hover:bg-muted/40 transition-colors ${
-                              dim === "unit" || dim === "buyer" ? "cursor-pointer" : ""
-                            }`}
-                          >
-                            <td className="px-3 py-2.5 font-medium text-foreground">{row.label}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{formatValue(row.previousValue)}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-foreground">{formatValue(row.currentValue)}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums font-bold text-red-600 dark:text-red-400">+{formatValue(row.difference)}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums text-red-600 dark:text-red-400">
-                              {row.differencePercent !== null ? `+${row.differencePercent.toFixed(1)}%` : "—"}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+            {/* Phase 11: Diagnostics Section */}
+            <details className="group rounded-lg border border-border bg-card shadow-sm open:pb-4">
+              <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
+                Diagnostics
+                <span className="ml-4 transition-transform duration-200 group-open:rotate-180 text-muted-foreground">
+                  ▼
+                </span>
+              </summary>
+              <div className="px-4 space-y-8 pt-2 border-t border-border mt-2">
+                {/* Phase 5: Stacked Area Trend — composition */}
+                <section>
+                  <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                    Operational Trend Composition
+                  </h2>
+                  {multiSeriesDataset && (
+                    <StackedAreaTrend
+                      data={multiSeriesDataset}
+                      title={`${metricLabel} contribution by ${groupLabel(dim).toLowerCase()}`}
+                      formatValue={formatValue}
+                    />
+                  )}
+                </section>
+
+                {/* Delta Heatmap (at bottom) */}
+                <section>
+                  <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-muted-foreground">
+                    {groupLabel(dim)} vs Date Delta Heatmap
+                  </h2>
+                  {heatmapDataset && (
+                    <HeatmapChart
+                      data={heatmapDataset}
+                      title={`${metricLabel} — backlog changes between adjacent report dates`}
+                      formatValue={formatValue}
+                    />
+                  )}
+                </section>
               </div>
-
-              {/* Table 2: Largest Reductions */}
-              <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
-                <h3 className="text-sm font-semibold text-foreground mb-3 text-green-600 dark:text-green-400">
-                  Largest Reductions (Top 5 {groupLabel(dim)}s)
-                </h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-border text-left uppercase text-muted-foreground">
-                        <th className="px-3 py-2 font-semibold">Entity</th>
-                        <th className="px-3 py-2 text-right font-semibold">Previous</th>
-                        <th className="px-3 py-2 text-right font-semibold">Current</th>
-                        <th className="px-3 py-2 text-right font-semibold">Delta</th>
-                        <th className="px-3 py-2 text-right font-semibold">%</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {moversData.reductions.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="px-3 py-4 text-center text-muted-foreground italic">
-                            No reductions detected.
-                          </td>
-                        </tr>
-                      ) : (
-                        moversData.reductions.map((row) => (
-                          <tr
-                            key={row.key}
-                            onClick={() => {
-                              if (dim === "unit") {
-                                setDrilldownUnit(row.label);
-                              } else if (dim === "buyer") {
-                                selectExplorerBuyer(row.label);
-                              }
-                            }}
-                            className={`border-b border-border/50 last:border-0 hover:bg-muted/40 transition-colors ${
-                              dim === "unit" || dim === "buyer" ? "cursor-pointer" : ""
-                            }`}
-                          >
-                            <td className="px-3 py-2.5 font-medium text-foreground">{row.label}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{formatValue(row.previousValue)}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-foreground">{formatValue(row.currentValue)}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums font-bold text-green-600 dark:text-green-400">{formatValue(row.difference)}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums text-green-600 dark:text-green-400">
-                              {row.differencePercent !== null ? `${row.differencePercent.toFixed(1)}%` : "—"}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </section>
-
-            {/* General Date Comparison View for Active Group Dimension */}
-            <section>
-              <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-                {metricLabel} — Current vs Previous Date for {groupLabel(dim)}
-              </h2>
-              {comparisonDataset ? (
-                <DateComparisonView
-                  data={comparisonDataset}
-                  title={`${metricLabel} by ${groupLabel(dim).toLowerCase()}`}
-                  formatValue={formatValue}
-                />
-              ) : (
-                <div className="flex h-[160px] items-center justify-center rounded-lg border border-dashed border-border bg-card/50">
-                  <p className="text-sm text-muted-foreground">
-                    Two report dates are required for comparison. Widen the date
-                    range or select more dates.
-                  </p>
-                </div>
-              )}
-            </section>
-
-            {/* Phase 5: Stacked Area Trend — composition */}
-            <section>
-              <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-                Operational Trend Composition
-              </h2>
-              {multiSeriesDataset && (
-                <StackedAreaTrend
-                  data={multiSeriesDataset}
-                  title={`${metricLabel} contribution by ${groupLabel(dim).toLowerCase()}`}
-                  formatValue={formatValue}
-                />
-              )}
-            </section>
-
-            {/* Delta Heatmap (at bottom) */}
-            <section>
-              <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-                {groupLabel(dim)} vs Date Delta Heatmap
-              </h2>
-              {heatmapDataset && (
-                <HeatmapChart
-                  data={heatmapDataset}
-                  title={`${metricLabel} — backlog changes between adjacent report dates`}
-                  formatValue={formatValue}
-                />
-              )}
-            </section>
+            </details>
           </>
         )}
       </div>
 
-      {/* Unit Detail Drilldown Modal */}
-      {comparisonPair.current && (
-        <UnitDrilldownModal
-          isOpen={Boolean(drilldownUnit)}
-          onClose={() => setDrilldownUnit(null)}
-          unit={drilldownUnit || ""}
-          metric={state.metric}
-          metricLabel={metricLabel}
-          reportTypeId={state.reportTypeId}
-          dateWindow={dateWindow}
-          latestDate={comparisonPair.current}
-          previousDate={comparisonPair.previous}
-          formatValue={formatValue}
-        />
-      )}
     </div>
   );
 }
