@@ -32,7 +32,6 @@ import {
   trendToHeatmap,
   trendToDateComparison,
   trendToLatestKpi,
-  trendToGroupedByDate,
   formatShortDate,
 } from "@/components/charts/adapters";
 import { GroupedBarChart } from "@/components/charts/grouped-bar-chart";
@@ -47,14 +46,12 @@ import {
   DashboardControls,
   type DashboardControlsState,
 } from "./dashboard-controls";
+import { BuyerExplorer } from "./buyer-explorer";
 import {
   GROUP_DIMENSION_OPTIONS,
   datesInWindow,
-  resolveComparisonPair,
   resolveDateWindow,
-  resolveEffectiveDates,
   resolveKpiMetrics,
-  COMPARISON_MODE_OPTIONS,
 } from "./dashboard-utils";
 
 // Optimized Components
@@ -85,13 +82,24 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     dateRange: "30d",
     customFrom: "",
     customTo: "",
-    comparisonMode: "latest-previous",
     groupDimension: "unit",
-    selectedDates: [],
+    selectedCurrentDate: "",
+    selectedComparisonDate: "",
   });
   const dashboardRef = useRef<HTMLDivElement>(null);
   const [timestamp, setTimestamp] = useState("");
   const [drilldownUnit, setDrilldownUnit] = useState<string | null>(null);
+  const [activeExplorerBuyer, setActiveExplorerBuyer] = useState("");
+
+  function selectExplorerBuyer(buyer: string) {
+    setActiveExplorerBuyer(buyer);
+    setTimeout(() => {
+      const element = document.getElementById("buyer-explorer-section");
+      if (element) {
+        element.scrollIntoView({ behavior: "smooth" });
+      }
+    }, 100);
+  }
 
   useEffect(() => {
     setTimestamp(new Date().toLocaleString());
@@ -128,6 +136,41 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     ? availableDates[availableDates.length - 1] ?? null
     : null;
 
+  // Initialize and validate selectedCurrentDate / selectedComparisonDate
+  useEffect(() => {
+    if (!availableDates.length) return;
+    const latest = availableDates[availableDates.length - 1];
+    const previous = availableDates.length > 1 ? availableDates[availableDates.length - 2] : "";
+
+    const hasValidCurrent = state.selectedCurrentDate && availableDates.includes(state.selectedCurrentDate);
+    const hasValidComparison = state.selectedComparisonDate && availableDates.includes(state.selectedComparisonDate);
+
+    const patchPayload: Partial<DashboardControlsState> = {};
+
+    if (!hasValidCurrent && latest) {
+      patchPayload.selectedCurrentDate = latest;
+    }
+    if (!hasValidComparison && previous) {
+      patchPayload.selectedComparisonDate = previous;
+    } else if (!hasValidComparison && !previous && latest) {
+      patchPayload.selectedComparisonDate = "";
+    }
+
+    // Validation: current and comparison cannot be identical
+    const nextCurrent = patchPayload.selectedCurrentDate !== undefined ? patchPayload.selectedCurrentDate : state.selectedCurrentDate;
+    const nextComparison = patchPayload.selectedComparisonDate !== undefined ? patchPayload.selectedComparisonDate : state.selectedComparisonDate;
+    
+    if (nextCurrent && nextCurrent === nextComparison) {
+      const otherIndex = availableDates.indexOf(nextCurrent);
+      const nextValid = otherIndex > 0 ? availableDates[otherIndex - 1] : (otherIndex < availableDates.length - 1 ? availableDates[otherIndex + 1] : "");
+      patchPayload.selectedComparisonDate = nextValid;
+    }
+
+    if (Object.keys(patchPayload).length > 0) {
+      setState((prev) => ({ ...prev, ...patchPayload }));
+    }
+  }, [availableDates, state.selectedCurrentDate, state.selectedComparisonDate]);
+
   // Default the metric once dimensions load (prefer Wait For Test, else first).
   useEffect(() => {
     if (!metrics.length) return;
@@ -160,35 +203,26 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     [availableDates, dateWindow],
   );
 
-  // Initialize selectedDates if in Custom Date Comparison with < 2 dates
-  useEffect(() => {
-    if (state.comparisonMode === "selected-dates" && windowDates.length >= 2) {
-      const isValid = state.selectedDates.length === 2 && state.selectedDates.every((d) => windowDates.includes(d));
-      if (!isValid) {
-        const lastTwo = windowDates.slice(-2);
-        patch({ selectedDates: lastTwo });
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.comparisonMode, windowDates, state.selectedDates]);
-
   const effectiveDates = useMemo(
-    () =>
-      resolveEffectiveDates(state.comparisonMode, windowDates, state.selectedDates),
-    [state.comparisonMode, windowDates, state.selectedDates],
+    () => {
+      const dates: string[] = [];
+      if (state.selectedComparisonDate) dates.push(state.selectedComparisonDate);
+      if (state.selectedCurrentDate) dates.push(state.selectedCurrentDate);
+      return dates.sort((a, b) => a.localeCompare(b));
+    },
+    [state.selectedCurrentDate, state.selectedComparisonDate],
   );
 
-  // Dates shown by trend/composition/heatmap. In Selected Dates mode these
-  // honor the user's explicit picks; otherwise the full window is shown so
-  // trends remain continuous.
-  const displayDates = useMemo(
-    () => (state.comparisonMode === "selected-dates" ? effectiveDates : windowDates),
-    [state.comparisonMode, effectiveDates, windowDates],
-  );
+  // Dates shown by trend/composition/heatmap. Trend charts remain unchanged
+  // and continue using the selected date range.
+  const displayDates = windowDates;
 
   const comparisonPair = useMemo(
-    () => resolveComparisonPair(effectiveDates),
-    [effectiveDates],
+    () => ({
+      current: state.selectedCurrentDate || null,
+      previous: state.selectedComparisonDate || null,
+    }),
+    [state.selectedCurrentDate, state.selectedComparisonDate],
   );
 
   // ---------------------------------------------------------------------------
@@ -344,13 +378,19 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
   // Executive summary stats
   const tStockKpi = useMemo(() => {
     const found = kpiQuery.data?.find((d) => d.trend.metric_key === "t_stock");
-    return found ? trendToLatestKpi(found.trend, found.label) : null;
-  }, [kpiQuery.data]);
+    return found ? trendToLatestKpi(found.trend, found.label, {
+      currentDate: state.selectedCurrentDate,
+      previousDate: state.selectedComparisonDate,
+    }) : null;
+  }, [kpiQuery.data, state.selectedCurrentDate, state.selectedComparisonDate]);
 
   const wftKpi = useMemo(() => {
     const found = kpiQuery.data?.find((d) => d.trend.metric_key === "wait_for_test");
-    return found ? trendToLatestKpi(found.trend, found.label) : null;
-  }, [kpiQuery.data]);
+    return found ? trendToLatestKpi(found.trend, found.label, {
+      currentDate: state.selectedCurrentDate,
+      previousDate: state.selectedComparisonDate,
+    }) : null;
+  }, [kpiQuery.data, state.selectedCurrentDate, state.selectedComparisonDate]);
 
   const largestContributor = useMemo(() => {
     if (!unitComparisonDataset || !unitComparisonDataset.rows.length) return null;
@@ -448,9 +488,9 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
         date_range: state.dateRange,
         custom_from: state.customFrom,
         custom_to: state.customTo,
-        comparison_mode: state.comparisonMode,
         group_dimension: state.groupDimension,
-        selected_dates: state.selectedDates,
+        current_report_date: state.selectedCurrentDate,
+        comparison_report_date: state.selectedComparisonDate,
       }
     );
 
@@ -530,11 +570,9 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
             <div className="font-semibold text-foreground mb-1 text-sm">Applied Filters:</div>
             <div className="grid grid-cols-2 gap-x-8 gap-y-1">
               <div><span className="font-medium text-foreground">Metric:</span> {metricLabel}</div>
-              <div><span className="font-medium text-foreground">Comparison Mode:</span> {COMPARISON_MODE_OPTIONS.find(o => o.value === state.comparisonMode)?.label ?? state.comparisonMode}</div>
               <div><span className="font-medium text-foreground">Group Dimension:</span> {groupLabel(dim)}</div>
-              {state.comparisonMode === "selected-dates" && (
-                <div><span className="font-medium text-foreground">Selected Dates:</span> {effectiveDates.map(formatShortDate).join(", ")}</div>
-              )}
+              <div><span className="font-medium text-foreground">Current Report Date:</span> {state.selectedCurrentDate ? `${formatShortDate(state.selectedCurrentDate)} (${state.selectedCurrentDate})` : "None"}</div>
+              <div><span className="font-medium text-foreground">Comparison Report Date:</span> {state.selectedComparisonDate ? `${formatShortDate(state.selectedComparisonDate)} (${state.selectedComparisonDate})` : "None"}</div>
             </div>
           </div>
         </div>
@@ -545,7 +583,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
             state={state}
             reportTypes={reportTypes}
             metrics={metrics}
-            availableDates={windowDates}
+            availableDates={availableDates}
             onChange={patch}
           />
         </div>
@@ -651,10 +689,10 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
           </div>
         )}
 
-        {/* Phase 7: Historical Comparison KPI Cards (latest vs previous date) */}
+        {/* Phase 7: Historical Comparison KPI Cards (selected vs comparison date) */}
         <section>
           <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-            Latest vs Previous Report Date
+            Selected vs Comparison Report Date
           </h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {kpiQuery.isLoading
@@ -662,7 +700,10 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
               : (kpiQuery.data ?? []).map(({ trend, label }) => (
                   <KpiCard
                     key={label}
-                    kpi={trendToLatestKpi(trend, label)}
+                    kpi={trendToLatestKpi(trend, label, {
+                      currentDate: state.selectedCurrentDate,
+                      previousDate: state.selectedComparisonDate,
+                    })}
                     formatValue={(v) =>
                       typeof v === "number" ? formatValue(v) : v
                     }
@@ -709,6 +750,17 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
               )}
             </section>
 
+            {/* Buyer Explorer Section */}
+            <section>
+              <BuyerExplorer
+                initialBuyer={activeExplorerBuyer}
+                availableBuyers={dimensionsQuery.data?.buyers ?? []}
+                availableMetrics={dimensionsQuery.data?.metrics ?? []}
+                availableDates={availableDates}
+                onBuyerChange={setActiveExplorerBuyer}
+              />
+            </section>
+
             {/* Buyer Analysis Section */}
             <section>
               {buyerTrendQuery.data && comparisonPair.current && (
@@ -718,6 +770,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                   previousDate={comparisonPair.previous}
                   formatValue={formatValue}
                   title="Buyer Analysis"
+                  onBuyerClick={selectExplorerBuyer}
                 />
               )}
             </section>
@@ -767,9 +820,15 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                         moversData.increases.map((row) => (
                           <tr
                             key={row.key}
-                            onClick={() => dim === "unit" && setDrilldownUnit(row.label)}
+                            onClick={() => {
+                              if (dim === "unit") {
+                                setDrilldownUnit(row.label);
+                              } else if (dim === "buyer") {
+                                selectExplorerBuyer(row.label);
+                              }
+                            }}
                             className={`border-b border-border/50 last:border-0 hover:bg-muted/40 transition-colors ${
-                              dim === "unit" ? "cursor-pointer" : ""
+                              dim === "unit" || dim === "buyer" ? "cursor-pointer" : ""
                             }`}
                           >
                             <td className="px-3 py-2.5 font-medium text-foreground">{row.label}</td>
@@ -814,9 +873,15 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                         moversData.reductions.map((row) => (
                           <tr
                             key={row.key}
-                            onClick={() => dim === "unit" && setDrilldownUnit(row.label)}
+                            onClick={() => {
+                              if (dim === "unit") {
+                                setDrilldownUnit(row.label);
+                              } else if (dim === "buyer") {
+                                selectExplorerBuyer(row.label);
+                              }
+                            }}
                             className={`border-b border-border/50 last:border-0 hover:bg-muted/40 transition-colors ${
-                              dim === "unit" ? "cursor-pointer" : ""
+                              dim === "unit" || dim === "buyer" ? "cursor-pointer" : ""
                             }`}
                           >
                             <td className="px-3 py-2.5 font-medium text-foreground">{row.label}</td>

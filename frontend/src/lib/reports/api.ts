@@ -515,3 +515,94 @@ export function triggerWorkbookDownload(blob: Blob, filename: string) {
   // Defer revoke so the browser has time to start the download in all cases.
   window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
 }
+
+export type BuyerHistoryPoint = {
+  date: string;
+  value: number;
+  delta: number | null;
+  percent_change: number | null;
+  is_present: boolean;
+};
+
+export type BuyerPresencePoint = {
+  date: string;
+  is_present: boolean;
+};
+
+export type BuyerContributionPoint = {
+  unit: string;
+  value: number;
+};
+
+export type BuyerContributionTrendPoint = {
+  date: string;
+  unit: string;
+  value: number;
+};
+
+export type BuyerUnitDrilldownPoint = {
+  date: string;
+  value: number;
+};
+
+export type BuyerComparisonResult = {
+  previous_date: string;
+  current_date: string;
+  previous_value: number;
+  current_value: number;
+  delta: number;
+  percent_change: number | null;
+};
+
+export type BuyerInsightsResult = {
+  largest_increase: { delta: number; date_from: string; date_to: string } | null;
+  largest_reduction: { delta: number; date_from: string; date_to: string } | null;
+  fastest_growth_pct: { pct: number; date_from: string; date_to: string } | null;
+  most_stable_period: { delta_abs: number; date_from: string; date_to: string } | null;
+};
+
+export type BuyerRankingPoint = {
+  date: string;
+  rank: number | null;
+};
+
+export function getBuyerHistory(params: { buyer: string; metric: string; date_from?: string; date_to?: string }) {
+  const query = operationalParams(params);
+  return request<BuyerHistoryPoint[]>(`/api/reports/buyer-history${query ? `?${query}` : ""}`);
+}
+
+export function getBuyerPresence(params: { buyer: string; date_from?: string; date_to?: string }) {
+  const query = operationalParams(params);
+  return request<BuyerPresencePoint[]>(`/api/reports/buyer-presence${query ? `?${query}` : ""}`);
+}
+
+export function getBuyerContribution(params: { buyer: string; metric: string; target_date?: string }) {
+  const query = operationalParams(params);
+  return request<BuyerContributionPoint[]>(`/api/reports/buyer-contribution${query ? `?${query}` : ""}`);
+}
+
+export function getBuyerContributionTrend(params: { buyer: string; metric: string; date_from?: string; date_to?: string }) {
+  const query = operationalParams(params);
+  return request<BuyerContributionTrendPoint[]>(`/api/reports/buyer-contribution-trend${query ? `?${query}` : ""}`);
+}
+
+export function getBuyerUnitDrilldown(params: { buyer: string; unit: string; metric: string; date_from?: string; date_to?: string }) {
+  const query = operationalParams(params);
+  return request<BuyerUnitDrilldownPoint[]>(`/api/reports/buyer-unit-drilldown${query ? `?${query}` : ""}`);
+}
+
+export function getBuyerComparison(params: { buyer: string; metric: string; date_a: string; date_b: string }) {
+  const query = operationalParams(params);
+  return request<BuyerComparisonResult>(`/api/reports/buyer-comparison${query ? `?${query}` : ""}`);
+}
+
+export function getBuyerInsights(params: { buyer: string; metric: string; date_from?: string; date_to?: string }) {
+  const query = operationalParams(params);
+  return request<BuyerInsightsResult>(`/api/reports/buyer-insights${query ? `?${query}` : ""}`);
+}
+
+export function getBuyerRankingTrend(params: { buyer: string; metric: string; date_from?: string; date_to?: string }) {
+  const query = operationalParams(params);
+  return request<BuyerRankingPoint[]>(`/api/reports/buyer-ranking-trend${query ? `?${query}` : ""}`);
+}
+

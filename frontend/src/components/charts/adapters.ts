@@ -12,7 +12,6 @@ import type {
 } from "@/lib/reports/types";
 import type {
   DateComparisonDataset,
-  DateComparisonRow,
   GroupedSeriesDataset,
   GroupedSeriesPoint,
   GroupedTotalItem,
@@ -22,6 +21,7 @@ import type {
   TimeSeriesDataset,
   TimeSeriesPoint,
 } from "./types";
+import { calculateComparison } from "../dashboards/comparison-engine";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -480,41 +480,23 @@ export function trendToDateComparison(
   options: { topN?: number } = {},
 ): DateComparisonDataset {
   const dimension = trend.series_by ?? "series";
-  const current = new Map<string, number>();
-  const previous = new Map<string, number>();
-  const groups = new Set<string>();
+  const currentMap = new Map<string, number>();
+  const previousMap = new Map<string, number>();
 
   for (const point of trend.points) {
     const group = point.series ?? trend.metric_key;
     const value = toNumber(point.numeric_total);
     if (point.report_date === currentDate) {
-      current.set(group, (current.get(group) ?? 0) + value);
-      groups.add(group);
+      currentMap.set(group, (currentMap.get(group) ?? 0) + value);
     } else if (point.report_date === previousDate) {
-      previous.set(group, (previous.get(group) ?? 0) + value);
-      groups.add(group);
+      previousMap.set(group, (previousMap.get(group) ?? 0) + value);
     }
   }
 
-  const rows: DateComparisonRow[] = Array.from(groups).map((group) => {
-    const currentValue = current.get(group) ?? 0;
-    const previousValue = previous.get(group) ?? 0;
-    const difference = currentValue - previousValue;
-    const differencePercent =
-      previousValue !== 0 ? (difference / previousValue) * 100 : null;
-    const direction: "up" | "down" | "flat" =
-      difference > 0 ? "up" : difference < 0 ? "down" : "flat";
-    return {
-      key: group,
-      label: group,
-      currentValue,
-      previousValue,
-      difference,
-      differencePercent,
-      direction,
-    };
-  });
+  const currentData = Array.from(currentMap.entries()).map(([key, value]) => ({ key, value }));
+  const previousData = Array.from(previousMap.entries()).map(([key, value]) => ({ key, value }));
 
+  const rows = calculateComparison(currentData, previousData);
   rows.sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference));
   const limited = options.topN && options.topN > 0 ? rows.slice(0, options.topN) : rows;
 
@@ -537,6 +519,7 @@ export function trendToDateComparison(
 export function trendToLatestKpi(
   trend: OperationalTrendResponse,
   label: string,
+  options: { currentDate?: string | null; previousDate?: string | null } = {},
 ): KpiValue {
   // Aggregate per report date (across all series for the metric total).
   const byDate = new Map<string, number>();
@@ -548,23 +531,27 @@ export function trendToLatestKpi(
   }
 
   const dates = Array.from(byDate.keys()).sort((a, b) => a.localeCompare(b));
-  const latestDate = dates[dates.length - 1];
+  const latestDate = options.currentDate || dates[dates.length - 1];
   if (!latestDate) {
     return { label, value: "—", direction: "flat" };
   }
 
-  const previousDate = dates.length > 1 ? dates[dates.length - 2] ?? null : null;
+  const previousDate = options.currentDate
+    ? (options.previousDate || null)
+    : (dates.length > 1 ? dates[dates.length - 2] ?? null : null);
+
   const currentValue = byDate.get(latestDate) ?? 0;
   const previousValue = previousDate !== null ? byDate.get(previousDate) ?? 0 : null;
 
-  let delta: number | null = null;
-  let deltaPercent: number | null = null;
-  let direction: "up" | "down" | "flat" = "flat";
-  if (previousValue !== null) {
-    delta = currentValue - previousValue;
-    deltaPercent = previousValue !== 0 ? (delta / previousValue) * 100 : null;
-    direction = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
-  }
+  // Use the shared comparison engine
+  const kpiComparison = calculateComparison(
+    [{ key: "total", value: currentValue }],
+    previousValue !== null ? [{ key: "total", value: previousValue }] : []
+  )[0];
+
+  const delta = kpiComparison?.difference ?? null;
+  const deltaPercent = kpiComparison?.differencePercent ?? null;
+  const direction = kpiComparison?.direction ?? "flat";
 
   // Calculate primary driver from unit series
   let primaryDriver: string | undefined = undefined;
@@ -572,57 +559,59 @@ export function trendToLatestKpi(
   let driverDirection: "up" | "down" | "flat" | undefined = undefined;
 
   if (previousDate && latestDate) {
-    const unitDeltas = new Map<string, { prev: number; curr: number }>();
+    const currMap = new Map<string, number>();
+    const prevMap = new Map<string, number>();
+
     for (const point of trend.points) {
       const unit = point.series;
       if (!unit) continue;
       const val = toNumber(point.numeric_total);
-      let entry = unitDeltas.get(unit);
-      if (!entry) {
-        entry = { prev: 0, curr: 0 };
-        unitDeltas.set(unit, entry);
-      }
       if (point.report_date === previousDate) {
-        entry.prev += val;
+        prevMap.set(unit, (prevMap.get(unit) ?? 0) + val);
       } else if (point.report_date === latestDate) {
-        entry.curr += val;
+        currMap.set(unit, (currMap.get(unit) ?? 0) + val);
       }
     }
 
+    const currentUnitData = Array.from(currMap.entries()).map(([key, value]) => ({ key, value }));
+    const previousUnitData = Array.from(prevMap.entries()).map(([key, value]) => ({ key, value }));
+
+    const unitComparisons = calculateComparison(currentUnitData, previousUnitData);
+
     let bestUnit: string | null = null;
     let bestDelta = 0;
-
     const overallDelta = delta ?? 0;
-    for (const [unit, entry] of unitDeltas.entries()) {
-      const unitDelta = entry.curr - entry.prev;
+
+    for (const item of unitComparisons) {
+      const unitDelta = item.difference;
       if (overallDelta > 0) {
         // Looking for largest increase
         if (unitDelta > bestDelta) {
           bestDelta = unitDelta;
-          bestUnit = unit;
+          bestUnit = item.key;
         }
       } else if (overallDelta < 0) {
         // Looking for largest decrease (most negative)
         if (unitDelta < bestDelta) {
           bestDelta = unitDelta;
-          bestUnit = unit;
+          bestUnit = item.key;
         }
       } else {
         // Flat or no clear direction, use largest absolute change
         if (Math.abs(unitDelta) > Math.abs(bestDelta)) {
           bestDelta = unitDelta;
-          bestUnit = unit;
+          bestUnit = item.key;
         }
       }
     }
 
     // Fallback to absolute change if no directed unit was found
     if (!bestUnit) {
-      for (const [unit, entry] of unitDeltas.entries()) {
-        const unitDelta = entry.curr - entry.prev;
+      for (const item of unitComparisons) {
+        const unitDelta = item.difference;
         if (Math.abs(unitDelta) > Math.abs(bestDelta)) {
           bestDelta = unitDelta;
-          bestUnit = unit;
+          bestUnit = item.key;
         }
       }
     }

@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { X, ArrowUpDown, ArrowUp, ArrowDown, Minus, Loader2 } from "lucide-react";
+import { X, ArrowUpDown, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
 import { getChartTimeSeries } from "@/lib/charts/api";
 import { formatShortDate } from "./adapters";
 

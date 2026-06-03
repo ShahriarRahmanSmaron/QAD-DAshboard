@@ -16,7 +16,6 @@
  */
 
 import type {
-  DashboardComparisonMode,
   DateRange,
   GroupDimension,
 } from "@/components/charts/types";
@@ -26,7 +25,6 @@ import type {
   ReportTypeOption,
 } from "@/lib/reports/types";
 import {
-  COMPARISON_MODE_OPTIONS,
   DATE_RANGE_OPTIONS,
   GROUP_DIMENSION_OPTIONS,
 } from "./dashboard-utils";
@@ -37,9 +35,9 @@ export type DashboardControlsState = {
   dateRange: DateRange;
   customFrom: string;
   customTo: string;
-  comparisonMode: DashboardComparisonMode;
   groupDimension: GroupDimension;
-  selectedDates: string[];
+  selectedCurrentDate: string;
+  selectedComparisonDate: string;
 };
 
 type DashboardControlsProps = {
@@ -75,22 +73,9 @@ export function DashboardControls({
   availableDates,
   onChange,
 }: DashboardControlsProps) {
-  const dateA = state.selectedDates[0] || "";
-  const dateB = state.selectedDates[1] || "";
-
-  function handleDateAChange(val: string) {
-    const nextDates = [val, dateB || val].sort((a, b) => a.localeCompare(b));
-    onChange({ selectedDates: nextDates });
-  }
-
-  function handleDateBChange(val: string) {
-    const nextDates = [dateA || val, val].sort((a, b) => a.localeCompare(b));
-    onChange({ selectedDates: nextDates });
-  }
-
   return (
     <div className="space-y-4 rounded-lg border border-border bg-card p-4">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
         {/* Report Type */}
         <ControlGroup label="Report Type">
           <select
@@ -124,7 +109,7 @@ export function DashboardControls({
         </ControlGroup>
 
         {/* Date Range */}
-        <ControlGroup label="Date Range">
+        <ControlGroup label="Date Range (Trends)">
           <select
             value={state.dateRange}
             onChange={(e) => onChange({ dateRange: e.target.value as DateRange })}
@@ -133,23 +118,6 @@ export function DashboardControls({
             {DATE_RANGE_OPTIONS.map((dr) => (
               <option key={dr.value} value={dr.value}>
                 {dr.label}
-              </option>
-            ))}
-          </select>
-        </ControlGroup>
-
-        {/* Comparison Type */}
-        <ControlGroup label="Comparison Type">
-          <select
-            value={state.comparisonMode}
-            onChange={(e) =>
-              onChange({ comparisonMode: e.target.value as DashboardComparisonMode })
-            }
-            className={selectClass}
-          >
-            {COMPARISON_MODE_OPTIONS.map((cm) => (
-              <option key={cm.value} value={cm.value}>
-                {cm.label}
               </option>
             ))}
           </select>
@@ -167,6 +135,46 @@ export function DashboardControls({
             {GROUP_DIMENSION_OPTIONS.map((gd) => (
               <option key={gd.value} value={gd.value}>
                 {gd.label}
+              </option>
+            ))}
+          </select>
+        </ControlGroup>
+
+        {/* Current Report Date */}
+        <ControlGroup label="Current Report Date">
+          <select
+            value={state.selectedCurrentDate}
+            onChange={(e) => onChange({ selectedCurrentDate: e.target.value })}
+            className={selectClass}
+          >
+            <option value="" disabled>Select Current Date</option>
+            {[...availableDates].reverse().map((date) => (
+              <option
+                key={`curr-${date}`}
+                value={date}
+                disabled={date === state.selectedComparisonDate}
+              >
+                {formatShortDate(date)}
+              </option>
+            ))}
+          </select>
+        </ControlGroup>
+
+        {/* Comparison Report Date */}
+        <ControlGroup label="Comparison Report Date">
+          <select
+            value={state.selectedComparisonDate}
+            onChange={(e) => onChange({ selectedComparisonDate: e.target.value })}
+            className={selectClass}
+          >
+            <option value="" disabled>Select Comparison Date</option>
+            {[...availableDates].reverse().map((date) => (
+              <option
+                key={`comp-${date}`}
+                value={date}
+                disabled={date === state.selectedCurrentDate}
+              >
+                {formatShortDate(date)}
               </option>
             ))}
           </select>
@@ -190,54 +198,6 @@ export function DashboardControls({
             onChange={(e) => onChange({ customTo: e.target.value })}
             className="rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
           />
-        </div>
-      )}
-
-      {/* Custom Date Comparison Dropdowns */}
-      {state.comparisonMode === "selected-dates" && (
-        <div className="space-y-2 border-t border-border pt-3">
-          <p className="text-xs font-semibold text-muted-foreground">
-            Custom Date Comparison
-          </p>
-          {availableDates.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              No report dates available in the current range.
-            </p>
-          ) : (
-            <div className="flex flex-wrap gap-4 items-center">
-              <div className="space-y-1">
-                <span className="block text-[11px] font-medium text-muted-foreground">Base Date (Date A)</span>
-                <select
-                  value={dateA}
-                  onChange={(e) => handleDateAChange(e.target.value)}
-                  className="block w-48 rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="" disabled>Select Date A</option>
-                  {availableDates.map((date) => (
-                    <option key={`a-${date}`} value={date}>
-                      {formatShortDate(date)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="text-muted-foreground text-xs self-end pb-2 font-medium">vs</div>
-              <div className="space-y-1">
-                <span className="block text-[11px] font-medium text-muted-foreground">Comparison Date (Date B)</span>
-                <select
-                  value={dateB}
-                  onChange={(e) => handleDateBChange(e.target.value)}
-                  className="block w-48 rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="" disabled>Select Date B</option>
-                  {availableDates.map((date) => (
-                    <option key={`b-${date}`} value={date}>
-                      {formatShortDate(date)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>
