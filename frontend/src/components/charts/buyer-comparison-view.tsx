@@ -17,6 +17,7 @@ import { useChartTheme } from "./use-chart-theme";
 import { ChartTooltip } from "./chart-tooltip";
 import { formatShortDate } from "./adapters";
 import { ChartExportButtons } from "./export-buttons";
+import { calculateComparison } from "../dashboards/comparison-engine";
 
 type BuyerComparisonViewProps = {
   buyerTrend: OperationalTrendResponse;
@@ -24,6 +25,7 @@ type BuyerComparisonViewProps = {
   previousDate: string | null;
   formatValue?: (value: number) => string;
   title?: string;
+  onBuyerClick?: (buyer: string) => void;
 };
 
 type SortField = "current" | "delta" | "percent";
@@ -34,6 +36,7 @@ export function BuyerComparisonView({
   previousDate,
   formatValue,
   title = "Buyer Comparison View",
+  onBuyerClick,
 }: BuyerComparisonViewProps) {
   const { theme, getColor, isDark } = useChartTheme();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -47,41 +50,33 @@ export function BuyerComparisonView({
     const prevDate = previousDate || "";
     const currDate = currentDate;
 
-    const buyerMap = new Map<string, { prev: number; curr: number }>();
-    const buyers = new Set<string>();
+    const currMap = new Map<string, number>();
+    const prevMap = new Map<string, number>();
 
     for (const point of buyerTrend.points) {
       const buyer = point.series;
       if (!buyer) continue;
-      buyers.add(buyer);
-
       const val = parseFloat(String(point.numeric_total || 0));
-      let entry = buyerMap.get(buyer);
-      if (!entry) {
-        entry = { prev: 0, curr: 0 };
-        buyerMap.set(buyer, entry);
-      }
 
       if (point.report_date === prevDate) {
-        entry.prev += val;
+        prevMap.set(buyer, (prevMap.get(buyer) ?? 0) + val);
       } else if (point.report_date === currDate) {
-        entry.curr += val;
+        currMap.set(buyer, (currMap.get(buyer) ?? 0) + val);
       }
     }
 
-    const list = Array.from(buyers).map((buyer) => {
-      const entry = buyerMap.get(buyer) || { prev: 0, curr: 0 };
-      const difference = entry.curr - entry.prev;
-      const differencePercent = entry.prev !== 0 ? (difference / entry.prev) * 100 : null;
+    const currentData = Array.from(currMap.entries()).map(([key, value]) => ({ key, value }));
+    const previousData = Array.from(prevMap.entries()).map(([key, value]) => ({ key, value }));
 
-      return {
-        buyer,
-        prevVal: entry.prev,
-        currVal: entry.curr,
-        difference,
-        differencePercent,
-      };
-    });
+    const comparisons = calculateComparison(currentData, previousData);
+
+    const list = comparisons.map((c) => ({
+      buyer: c.key,
+      prevVal: c.previousValue,
+      currVal: c.currentValue,
+      difference: c.difference,
+      differencePercent: c.differencePercent,
+    }));
 
     // Sort by criteria
     list.sort((a, b) => {
@@ -230,12 +225,28 @@ export function BuyerComparisonView({
               fill={getColor(1)} // Second color for previous date
               radius={[0, 4, 4, 0]}
               maxBarSize={14}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              onClick={(data: any) => {
+                const buyerName = data?.buyer || data?.payload?.buyer;
+                if (buyerName && onBuyerClick) {
+                  onBuyerClick(buyerName);
+                }
+              }}
+              className="cursor-pointer hover:opacity-85 transition-opacity"
             />
             <Bar
               dataKey={currLabel}
               fill={getColor(0)} // First color for current date
               radius={[0, 4, 4, 0]}
               maxBarSize={14}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              onClick={(data: any) => {
+                const buyerName = data?.buyer || data?.payload?.buyer;
+                if (buyerName && onBuyerClick) {
+                  onBuyerClick(buyerName);
+                }
+              }}
+              className="cursor-pointer hover:opacity-85 transition-opacity"
             />
           </BarChart>
         </ResponsiveContainer>
@@ -259,7 +270,19 @@ export function BuyerComparisonView({
                 key={row.buyer}
                 className="border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors"
               >
-                <td className="px-4 py-2.5 font-medium text-foreground">{row.buyer}</td>
+                <td className="px-4 py-2.5 font-medium text-foreground text-left">
+                  {onBuyerClick ? (
+                    <button
+                      onClick={() => onBuyerClick(row.buyer)}
+                      className="text-left font-medium text-primary hover:underline hover:text-primary/80 transition-colors"
+                      type="button"
+                    >
+                      {row.buyer}
+                    </button>
+                  ) : (
+                    row.buyer
+                  )}
+                </td>
                 <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
                   {format(row.prevVal)}
                 </td>

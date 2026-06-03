@@ -31,6 +31,8 @@ type MultiSeriesTrendProps = {
   title?: string;
   height?: number;
   formatValue?: (value: number) => string;
+  focusUnit?: string;
+  onSeriesClick?: (series: string) => void;
 };
 
 export function MultiSeriesTrend({
@@ -38,6 +40,8 @@ export function MultiSeriesTrend({
   title,
   height = 360,
   formatValue,
+  focusUnit,
+  onSeriesClick,
 }: MultiSeriesTrendProps) {
   const { theme, getColor } = useChartTheme();
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -72,9 +76,10 @@ export function MultiSeriesTrend({
   }
 
   const visibleKeys = data.seriesKeys.filter((key) => !hidden.has(key));
+  const isAnyUnitFocused = focusUnit && focusUnit !== "all";
 
   return (
-    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4">
+    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4" data-chart-mode="trend-lines">
       <div className="flex items-center justify-between mb-3 gap-2">
         {title && (
           <h3 className="text-sm font-semibold text-foreground">{title}</h3>
@@ -104,18 +109,24 @@ export function MultiSeriesTrend({
             content={<ChartTooltip formatValue={formatValue} />}
             labelFormatter={(label) => formatShortDate(String(label))}
           />
-          {visibleKeys.map((key) => (
-            <Line
-              key={key}
-              type="monotone"
-              dataKey={key}
-              name={data.seriesLabels[key] ?? key}
-              stroke={colorFor[key]}
-              strokeWidth={2}
-              dot={false}
-              activeDot={{ r: 4, strokeWidth: 2 }}
-            />
-          ))}
+          {visibleKeys.map((key) => {
+            const isFocused = !isAnyUnitFocused || key === focusUnit;
+            return (
+              <Line
+                key={key}
+                type="monotone"
+                dataKey={key}
+                name={data.seriesLabels[key] ?? key}
+                stroke={colorFor[key]}
+                strokeWidth={isFocused ? 3 : 1.5}
+                strokeOpacity={isFocused ? 1.0 : 0.15}
+                dot={false}
+                activeDot={isFocused ? { r: 4, strokeWidth: 2 } : false}
+                onClick={() => onSeriesClick?.(key)}
+                className={onSeriesClick ? "cursor-pointer" : undefined}
+              />
+            );
+          })}
         </LineChart>
       </ResponsiveContainer>
 
@@ -123,15 +134,16 @@ export function MultiSeriesTrend({
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
         {data.seriesKeys.map((key) => {
           const isHidden = hidden.has(key);
+          const isFocused = !isAnyUnitFocused || key === focusUnit;
           return (
             <button
               key={key}
               type="button"
-              onClick={() => toggle(key)}
+              onClick={() => onSeriesClick ? onSeriesClick(key) : toggle(key)}
               className={`flex items-center gap-1.5 text-xs font-medium transition-opacity ${
-                isHidden ? "opacity-40" : "opacity-100"
+                isHidden ? "opacity-40" : (isFocused ? "opacity-100 font-semibold" : "opacity-40")
               }`}
-              title={isHidden ? "Show series" : "Hide series"}
+              title={onSeriesClick ? "View details" : (isHidden ? "Show series" : "Hide series")}
             >
               <span
                 className="inline-block h-2.5 w-2.5 rounded-full"

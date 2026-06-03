@@ -13,17 +13,9 @@ type HeatmapChartProps = {
 };
 
 export function HeatmapChart({ data, title, formatValue }: HeatmapChartProps) {
-  const { theme, isDark } = useChartTheme();
+  const { isDark } = useChartTheme();
   const [displayMode, setDisplayMode] = useState<"percentage" | "value">("percentage");
   const containerRef = useRef<HTMLDivElement>(null);
-
-  if (!data.rows.length || !data.columns.length) {
-    return (
-      <div className="flex h-[300px] items-center justify-center rounded-lg border border-border bg-card p-6">
-        <p className="text-sm text-muted-foreground">No heatmap data available</p>
-      </div>
-    );
-  }
 
   // Calculate delta value or delta percentage between adjacent report dates
   const { deltaMatrix, maxAbs } = useMemo(() => {
@@ -61,6 +53,14 @@ export function HeatmapChart({ data, title, formatValue }: HeatmapChartProps) {
 
     return { deltaMatrix: matrix, maxAbs: maxVal };
   }, [data, displayMode]);
+
+  if (!data.rows.length || !data.columns.length) {
+    return (
+      <div className="flex h-[300px] items-center justify-center rounded-lg border border-border bg-card p-6">
+        <p className="text-sm text-muted-foreground">No heatmap data available</p>
+      </div>
+    );
+  }
 
   // Dimensions for SVG replica export
   const colWidth = 90;
@@ -107,7 +107,7 @@ export function HeatmapChart({ data, title, formatValue }: HeatmapChartProps) {
     const formattedVal =
       displayMode === "percentage"
         ? `${isPositive ? "+" : ""}${val.toFixed(1)}%`
-        : `${isPositive ? "+" : ""}${Math.round(val).toLocaleString()}`;
+        : `${isPositive ? "+" : ""}${formatValue ? formatValue(val) : Math.round(val).toLocaleString()}`;
 
     const labelText = val === 0 ? "0" : formattedVal;
 
@@ -266,7 +266,7 @@ export function HeatmapChart({ data, title, formatValue }: HeatmapChartProps) {
                 {/* Cells */}
                 {data.columns.map((col, colIndex) => {
                   const xOffset = labelWidth + colIndex * colWidth;
-                  const { bgColor, labelText, opacity, rawVal } = getCellDetails(
+                  const { labelText, opacity, rawVal } = getCellDetails(
                     row,
                     col,
                     colIndex === 0

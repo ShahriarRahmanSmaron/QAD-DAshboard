@@ -407,7 +407,9 @@ async def get_operational_comparison(
     session: SessionDep,
     user: ReportReaderDep,
     metric: Annotated[str, Query(min_length=1)],
-    current_date: date,
+    current_report_date: date | None = None,
+    comparison_report_date: date | None = None,
+    current_date: date | None = None,
     previous_date: date | None = None,
     buyer: str | None = None,
     unit: str | None = None,
@@ -415,17 +417,20 @@ async def get_operational_comparison(
     report_type_id: UUID | None = None,
     classification: str | None = None,
 ) -> OperationalComparisonResponse:
-    """Previous-day / nearest-previous-record comparison with delta indicators.
-
-    When ``previous_date`` is omitted, the nearest previous operational date
-    is resolved automatically.
-    """
+    """Compare operational totals between two specific dates."""
+    curr_date = current_report_date or current_date
+    comp_date = comparison_report_date or previous_date
+    if not curr_date or not comp_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Both current_report_date (or current_date) and comparison_report_date (or previous_date) are required.",
+        )
     comparison = await repository.get_operational_comparison(
         session,
         user=user,
         metric_key=metric,
-        current_date=current_date,
-        previous_date=previous_date,
+        current_date=curr_date,
+        previous_date=comp_date,
         buyer=buyer,
         unit=unit,
         operational_section=section,
@@ -1125,6 +1130,128 @@ async def post_report_metric(
         raise
 
     return serialize_metric(metric)
+
+
+@router.get("/buyer-history")
+async def api_buyer_history(
+    buyer: Annotated[str, Query(min_length=1)],
+    metric: Annotated[str, Query(min_length=1)],
+    session: SessionDep,
+    user: ReportReaderDep,
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    from app.reporting import buyer_history_service
+    return await buyer_history_service.get_buyer_history(
+        session, user, buyer=buyer, metric=metric, date_from=date_from, date_to=date_to
+    )
+
+
+@router.get("/buyer-contribution")
+async def api_buyer_contribution(
+    buyer: Annotated[str, Query(min_length=1)],
+    metric: Annotated[str, Query(min_length=1)],
+    session: SessionDep,
+    user: ReportReaderDep,
+    target_date: date | None = None,
+):
+    from app.reporting import buyer_history_service
+    return await buyer_history_service.get_buyer_contribution(
+        session, user, buyer=buyer, metric=metric, target_date=target_date
+    )
+
+
+@router.get("/buyer-contribution-trend")
+async def api_buyer_contribution_trend(
+    buyer: Annotated[str, Query(min_length=1)],
+    metric: Annotated[str, Query(min_length=1)],
+    session: SessionDep,
+    user: ReportReaderDep,
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    from app.reporting import buyer_history_service
+    return await buyer_history_service.get_buyer_contribution_trend(
+        session, user, buyer=buyer, metric=metric, date_from=date_from, date_to=date_to
+    )
+
+
+@router.get("/buyer-unit-drilldown")
+async def api_buyer_unit_drilldown(
+    buyer: Annotated[str, Query(min_length=1)],
+    unit: Annotated[str, Query(min_length=1)],
+    metric: Annotated[str, Query(min_length=1)],
+    session: SessionDep,
+    user: ReportReaderDep,
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    from app.reporting import buyer_history_service
+    return await buyer_history_service.get_buyer_unit_drilldown(
+        session, user, buyer=buyer, unit=unit, metric=metric, date_from=date_from, date_to=date_to
+    )
+
+
+@router.get("/buyer-presence")
+async def api_buyer_presence(
+    buyer: Annotated[str, Query(min_length=1)],
+    session: SessionDep,
+    user: ReportReaderDep,
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    from app.reporting import buyer_history_service
+    return await buyer_history_service.get_buyer_presence_matrix(
+        session, user, buyer=buyer, date_from=date_from, date_to=date_to
+    )
+
+
+@router.get("/buyer-comparison")
+async def api_buyer_comparison(
+    buyer: Annotated[str, Query(min_length=1)],
+    metric: Annotated[str, Query(min_length=1)],
+    date_a: Annotated[date, Query()],
+    date_b: Annotated[date, Query()],
+    session: SessionDep,
+    user: ReportReaderDep,
+):
+    from app.reporting import buyer_history_service
+    return await buyer_history_service.get_buyer_date_comparison(
+        session, user, buyer=buyer, metric=metric, date_a=date_a, date_b=date_b
+    )
+
+
+@router.get("/buyer-insights")
+async def api_buyer_insights(
+    buyer: Annotated[str, Query(min_length=1)],
+    metric: Annotated[str, Query(min_length=1)],
+    session: SessionDep,
+    user: ReportReaderDep,
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    from app.reporting import buyer_history_service
+    return await buyer_history_service.get_buyer_insights(
+        session, user, buyer=buyer, metric=metric, date_from=date_from, date_to=date_to
+    )
+
+
+@router.get("/buyer-ranking-trend")
+async def api_buyer_ranking_trend(
+    buyer: Annotated[str, Query(min_length=1)],
+    metric: Annotated[str, Query(min_length=1)],
+    session: SessionDep,
+    user: ReportReaderDep,
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    from app.reporting import buyer_history_service
+    return await buyer_history_service.get_buyer_ranking_trend(
+        session, user, buyer=buyer, metric=metric, date_from=date_from, date_to=date_to
+    )
+
+
+
 
 
 # NOTE: This bare ``/{report_id}`` GET is intentionally registered LAST.
