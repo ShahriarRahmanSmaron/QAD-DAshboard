@@ -10,7 +10,7 @@ type LoginPageProps = {
 
 function getSafeNextPath(nextPath: string | undefined) {
   if (!nextPath || !nextPath.startsWith("/") || nextPath.startsWith("//")) {
-    return "/";
+    return "/dashboard";
   }
 
   return nextPath;
@@ -19,7 +19,7 @@ function getSafeNextPath(nextPath: string | undefined) {
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const user = await getCurrentUser();
   if (user) {
-    redirect("/");
+    redirect("/dashboard");
   }
 
   const params = await searchParams;

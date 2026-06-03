@@ -6,28 +6,28 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: oklch(0.992 0.006 70);
-  --foreground: oklch(0.22 0.02 40);
-  --card: oklch(1 0 0 / 0.74);
-  --card-foreground: var(--foreground);
-  --popover: oklch(1 0 0 / 0.9);
-  --popover-foreground: var(--foreground);
-  --primary: oklch(0.62 0.16 38);
-  --primary-foreground: oklch(0.99 0.01 70);
-  --secondary: oklch(0.95 0.02 66);
-  --secondary-foreground: oklch(0.3 0.04 44);
-  --muted: oklch(0.95 0.018 66);
-  --muted-foreground: oklch(0.52 0.035 48);
-  --accent: oklch(0.9 0.06 70);
-  --accent-foreground: oklch(0.3 0.07 50);
-  --destructive: oklch(0.58 0.22 27);
-  --border: oklch(0.88 0.02 60 / 0.72);
-  --input: oklch(0.88 0.02 60 / 0.72);
-  --ring: oklch(0.66 0.15 45);
+  --background: #f4f3ee;
+  --foreground: #1c1917;
+  --card: #ffffff;
+  --card-foreground: #1c1917;
+  --popover: #ffffff;
+  --popover-foreground: #1c1917;
+  --primary: #c15f3c;
+  --primary-foreground: #ffffff;
+  --secondary: #e7e5e4;
+  --secondary-foreground: #1c1917;
+  --muted: #f5f5f4;
+  --muted-foreground: #78716c;
+  --accent: #b1ada1;
+  --accent-foreground: #1c1917;
+  --destructive: #dc2626;
+  --border: color-mix(in srgb, #b1ada1 40%, transparent);
+  --input: color-mix(in srgb, #b1ada1 40%, transparent);
+  --ring: #c15f3c;
   --radius: 0.65rem;
-  --sidebar: oklch(1 0 0 / 0.64);
-  --sidebar-foreground: var(--foreground);
-  --sidebar-border: var(--border);
+  --sidebar: #f4f3ee;
+  --sidebar-foreground: #1c1917;
+  --sidebar-border: color-mix(in srgb, #b1ada1 40%, transparent);
 }
 
 @media print {
@@ -71,25 +71,25 @@
 }
 
 .dark {
-  --background: oklch(0.19 0.018 40);
-  --foreground: oklch(0.96 0.008 70);
-  --card: oklch(0.24 0.02 42 / 0.72);
+  --background: #1c1917;
+  --foreground: #f4f3ee;
+  --card: #292524;
   --card-foreground: var(--foreground);
-  --popover: oklch(0.22 0.02 42 / 0.92);
+  --popover: #292524;
   --popover-foreground: var(--foreground);
-  --primary: oklch(0.74 0.14 55);
-  --primary-foreground: oklch(0.18 0.02 40);
-  --secondary: oklch(0.29 0.025 44);
-  --secondary-foreground: oklch(0.95 0.008 70);
-  --muted: oklch(0.27 0.022 44);
-  --muted-foreground: oklch(0.74 0.025 56);
-  --accent: oklch(0.4 0.07 58);
-  --accent-foreground: oklch(0.96 0.02 70);
-  --destructive: oklch(0.66 0.2 28);
-  --border: oklch(1 0 0 / 0.12);
-  --input: oklch(1 0 0 / 0.14);
-  --ring: oklch(0.74 0.14 55);
-  --sidebar: oklch(0.22 0.02 42 / 0.68);
+  --primary: #c15f3c;
+  --primary-foreground: #ffffff;
+  --secondary: #44403c;
+  --secondary-foreground: var(--foreground);
+  --muted: #292524;
+  --muted-foreground: #a8a29e;
+  --accent: #b1ada1;
+  --accent-foreground: #1c1917;
+  --destructive: #ef4444;
+  --border: color-mix(in srgb, #b1ada1 25%, transparent);
+  --input: color-mix(in srgb, #b1ada1 25%, transparent);
+  --ring: #c15f3c;
+  --sidebar: #1c1917;
   --sidebar-foreground: var(--foreground);
   --sidebar-border: var(--border);
 }
@@ -134,19 +134,19 @@ body {
   background:
     radial-gradient(
       circle at top left,
-      oklch(0.92 0.08 60 / 0.5),
+      color-mix(in srgb, #c15f3c 10%, transparent),
       transparent 34rem
     ),
     radial-gradient(
       circle at top right,
-      oklch(0.9 0.07 30 / 0.4),
+      color-mix(in srgb, #b1ada1 20%, transparent),
       transparent 38rem
     ),
     linear-gradient(
       135deg,
-      oklch(1 0.01 80),
+      #ffffff,
       var(--background) 46%,
-      oklch(0.95 0.04 50)
+      color-mix(in srgb, #b1ada1 10%, transparent)
     );
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
@@ -157,19 +157,19 @@ body {
   background:
     radial-gradient(
       circle at top left,
-      oklch(0.4 0.08 55 / 0.28),
+      color-mix(in srgb, #c15f3c 10%, transparent),
       transparent 34rem
     ),
     radial-gradient(
       circle at top right,
-      oklch(0.38 0.07 30 / 0.22),
+      color-mix(in srgb, #b1ada1 8%, transparent),
       transparent 38rem
     ),
     linear-gradient(
       135deg,
-      oklch(0.17 0.02 40),
+      #292524,
       var(--background) 52%,
-      oklch(0.22 0.03 36)
+      #1c1917
     );
 }
 

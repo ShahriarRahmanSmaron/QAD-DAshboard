@@ -1,18 +1,14 @@
-import { AppShell } from "@/components/layout/app-shell";
-import { DashboardHome } from "@/components/reports/dashboard-home";
+import { LandingPage } from "@/components/public/landing-page";
 import { getCurrentUser } from "@/lib/auth/server";
-import { redirect } from "next/navigation";
 
+/**
+ * MD09-LP: Root page — public landing experience.
+ *
+ * The landing page is always rendered (no redirect to login).
+ * `isAuthenticated` controls CTA copy and modal vs direct navigation.
+ */
 export default async function Home() {
   const user = await getCurrentUser();
 
-  if (!user) {
-    redirect("/login");
-  }
-
-  return (
-    <AppShell user={user}>
-      <DashboardHome fullName={user.full_name} />
-    </AppShell>
-  );
+  return <LandingPage isAuthenticated={!!user} />;
 }
