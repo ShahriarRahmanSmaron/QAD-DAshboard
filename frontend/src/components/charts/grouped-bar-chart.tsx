@@ -15,6 +15,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Legend,
   ResponsiveContainer,
   Tooltip,
@@ -34,6 +35,8 @@ type GroupedBarChartProps = {
   showGrid?: boolean;
   stacked?: boolean;
   formatValue?: (value: number) => string;
+  focusUnit?: string;
+  onCategoryClick?: (category: string) => void;
 };
 
 export function GroupedBarChart({
@@ -44,6 +47,8 @@ export function GroupedBarChart({
   showGrid = true,
   stacked = false,
   formatValue,
+  focusUnit,
+  onCategoryClick,
 }: GroupedBarChartProps) {
   const { theme, getColor } = useChartTheme();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -59,8 +64,10 @@ export function GroupedBarChart({
     );
   }
 
+  const isAnyUnitFocused = focusUnit && focusUnit !== "all";
+
   return (
-    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4">
+    <div ref={containerRef} className="w-full rounded-lg border border-border bg-card p-4" data-chart-mode="grouped-bars">
       <div className="flex items-center justify-between mb-3 gap-2">
         {title && (
           <h3 className="text-sm font-semibold text-foreground">{title}</h3>
@@ -111,7 +118,25 @@ export function GroupedBarChart({
               radius={[4, 4, 0, 0]}
               stackId={stacked ? "stack" : undefined}
               maxBarSize={64}
-            />
+              onClick={(state) => {
+                const s = state as { category?: string } | null;
+                if (s && s.category) {
+                  onCategoryClick?.(s.category);
+                }
+              }}
+              className="cursor-pointer"
+            >
+              {data.points.map((entry, entryIdx) => {
+                const isFocused = !isAnyUnitFocused || entry.category === focusUnit;
+                return (
+                  <Cell
+                    key={`cell-${entryIdx}`}
+                    fill={getColor(index)}
+                    fillOpacity={isFocused ? 1.0 : 0.15}
+                  />
+                );
+              })}
+            </Bar>
           ))}
         </BarChart>
       </ResponsiveContainer>

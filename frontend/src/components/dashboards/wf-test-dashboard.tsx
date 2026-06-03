@@ -62,6 +62,13 @@ import { BuyerComparisonView } from "@/components/charts/buyer-comparison-view";
 const STALE_TIME = 30_000;
 const TOP_N = 8;
 
+function toNumber(value: string | number | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "number") return value;
+  const parsed = parseFloat(value);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
 function formatValue(v: number): string {
   return Math.round(v).toLocaleString();
 }
@@ -90,6 +97,13 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
   const [timestamp, setTimestamp] = useState("");
   const [drilldownUnit, setDrilldownUnit] = useState<string | null>(null);
   const [activeExplorerBuyer, setActiveExplorerBuyer] = useState("");
+  const [unitHistoricalControls, setUnitHistoricalControls] = useState({
+    vizMode: "bars" as "bars" | "lines",
+    userSelectedVizMode: null as "bars" | "lines" | null,
+    unitVisibility: "all" as "all" | "top5" | "top10",
+    focusUnit: "all",
+    dateScope: "full" as "full" | "comparison",
+  });
 
   function selectExplorerBuyer(buyer: string) {
     setActiveExplorerBuyer(buyer);
@@ -457,7 +471,176 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     return { increases, reductions };
   }, [comparisonDataset]);
 
-  const isLoading = groupedTrendQuery.isLoading || dimensionsQuery.isLoading;
+  // ---------------------------------------------------------------------------
+  // Unit Historical Comparison calculations & filters
+  // ---------------------------------------------------------------------------
+  const unitComparisonDates = useMemo(() => {
+    if (unitHistoricalControls.dateScope === "comparison") {
+      return effectiveDates;
+    }
+    return displayDates;
+  }, [unitHistoricalControls.dateScope, effectiveDates, displayDates]);
+
+  const comparisonDatesCount = unitComparisonDates.length;
+
+  useEffect(() => {
+    if (unitHistoricalControls.userSelectedVizMode !== null) {
+      setUnitHistoricalControls(prev => ({
+        ...prev,
+        vizMode: prev.userSelectedVizMode || "bars"
+      }));
+    } else {
+      setUnitHistoricalControls(prev => ({
+        ...prev,
+        vizMode: comparisonDatesCount <= 7 ? "bars" : "lines"
+      }));
+    }
+  }, [comparisonDatesCount, unitHistoricalControls.userSelectedVizMode]);
+
+  const allUnitNames = useMemo(() => {
+    if (!unitTrendQuery.data) return [];
+    const names = new Set<string>();
+    for (const point of unitTrendQuery.data.points) {
+      if (point.series) {
+        names.add(point.series);
+      }
+    }
+    return Array.from(names).sort();
+  }, [unitTrendQuery.data]);
+
+  const latestScopeDate = useMemo(() => {
+    if (!unitComparisonDates.length) return null;
+    return unitComparisonDates[unitComparisonDates.length - 1];
+  }, [unitComparisonDates]);
+
+  const rankedUnits = useMemo(() => {
+    if (!unitTrendQuery.data || !latestScopeDate) return [];
+    const unitValues = new Map<string, number>();
+    for (const point of unitTrendQuery.data.points) {
+      if (point.report_date === latestScopeDate && point.series) {
+        unitValues.set(point.series, (unitValues.get(point.series) ?? 0) + toNumber(point.numeric_total));
+      }
+    }
+    allUnitNames.forEach(name => {
+      if (!unitValues.has(name)) {
+        unitValues.set(name, 0);
+      }
+    });
+    return Array.from(unitValues.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(entry => entry[0]);
+  }, [unitTrendQuery.data, latestScopeDate, allUnitNames]);
+
+  const filteredUnitTrend = useMemo(() => {
+    if (!unitTrendQuery.data) return undefined;
+    const allowedUnits = new Set<string>();
+    if (unitHistoricalControls.unitVisibility === "top5") {
+      rankedUnits.slice(0, 5).forEach(u => allowedUnits.add(u));
+    } else if (unitHistoricalControls.unitVisibility === "top10") {
+      rankedUnits.slice(0, 10).forEach(u => allowedUnits.add(u));
+    } else {
+      allUnitNames.forEach(u => allowedUnits.add(u));
+    }
+    
+    const filteredPoints = unitTrendQuery.data.points.filter(p => p.series && allowedUnits.has(p.series));
+    return {
+      ...unitTrendQuery.data,
+      points: filteredPoints,
+    };
+  }, [unitTrendQuery.data, unitHistoricalControls.unitVisibility, rankedUnits, allUnitNames]);
+
+  const unitGroupedBarDataset = useMemo(() => {
+    if (!filteredUnitTrend) return null;
+    return trendToGroupedSeriesByDate(filteredUnitTrend, {
+      selectedDates: unitComparisonDates,
+    });
+  }, [filteredUnitTrend, unitComparisonDates]);
+
+  const unitMultiSeriesDataset = useMemo(() => {
+    if (!filteredUnitTrend) return null;
+    return trendToMultiSeries(filteredUnitTrend, {
+      selectedDates: unitComparisonDates,
+    });
+  }, [filteredUnitTrend, unitComparisonDates]);
+
+  const unitInsights = useMemo(() => {
+    if (!unitTrendQuery.data || unitComparisonDates.length < 2) return null;
+    const firstDate = unitComparisonDates[0];
+    const lastDate = unitComparisonDates[unitComparisonDates.length - 1];
+
+    const firstValues = new Map<string, number>();
+    const lastValues = new Map<string, number>();
+
+    for (const point of unitTrendQuery.data.points) {
+      if (!point.series) continue;
+      const val = toNumber(point.numeric_total);
+      if (point.report_date === firstDate) {
+        firstValues.set(point.series, (firstValues.get(point.series) ?? 0) + val);
+      } else if (point.report_date === lastDate) {
+        lastValues.set(point.series, (lastValues.get(point.series) ?? 0) + val);
+      }
+    }
+
+    const results: Array<{
+      unit: string;
+      firstVal: number;
+      lastVal: number;
+      delta: number;
+      pct: number | null;
+      presentInBoth: boolean;
+    }> = [];
+
+    allUnitNames.forEach(unit => {
+      const firstVal = firstValues.get(unit);
+      const lastVal = lastValues.get(unit);
+      const firstExists = firstVal !== undefined;
+      const lastExists = lastVal !== undefined;
+      const fVal = firstVal ?? 0;
+      const lVal = lastVal ?? 0;
+      const delta = lVal - fVal;
+      const pct = fVal > 0 ? (delta / fVal) * 100 : null;
+
+      results.push({
+        unit,
+        firstVal: fVal,
+        lastVal: lVal,
+        delta,
+        pct,
+        presentInBoth: firstExists && lastExists,
+      });
+    });
+
+    const increases = results.filter(r => r.delta > 0).sort((a, b) => b.delta - a.delta);
+    const largestIncrease = increases[0] ?? null;
+
+    const reductions = results.filter(r => r.delta < 0).sort((a, b) => a.delta - b.delta);
+    const largestReduction = reductions[0] ?? null;
+
+    const stableCandidates = results.filter(r => r.presentInBoth);
+    const mostStable = [...stableCandidates].sort((a, b) => {
+      const pctA = a.firstVal === 0 ? (a.lastVal === 0 ? 0 : null) : Math.abs(a.pct ?? 0);
+      const pctB = b.firstVal === 0 ? (b.lastVal === 0 ? 0 : null) : Math.abs(b.pct ?? 0);
+
+      if (pctA !== null && pctB !== null) {
+        if (pctA !== pctB) return pctA - pctB;
+      } else if (pctA !== null) {
+        return -1;
+      } else if (pctB !== null) {
+        return 1;
+      }
+      return Math.abs(a.delta) - Math.abs(b.delta);
+    })[0] ?? null;
+
+    return {
+      largestIncrease,
+      largestReduction,
+      mostStable,
+      firstDate,
+      lastDate,
+    };
+  }, [unitTrendQuery.data, unitComparisonDates, allUnitNames]);
+
+  const isLoading = groupedTrendQuery.isLoading || dimensionsQuery.isLoading || unitTrendQuery.isLoading;
   const hasData = Boolean(groupedTrend && groupedTrend.points.length);
   const activeReportType = reportTypes.find((rt) => rt.id === state.reportTypeId)?.name ?? "All Report Types";
 
@@ -711,6 +894,233 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                   />
                 ))}
           </div>
+        </section>
+
+        {/* Unit Historical Comparison Restoration Section */}
+        <section className="rounded-lg border border-border bg-card p-5 shadow-sm space-y-6" data-focus-unit={unitHistoricalControls.focusUnit} data-unit-visibility={unitHistoricalControls.unitVisibility} data-date-scope={unitHistoricalControls.dateScope}>
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border/55 pb-3">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Unit Historical Comparison</h2>
+              <p className="text-xs text-muted-foreground">
+                Compare operational units across report dates.
+              </p>
+            </div>
+            
+            {/* Control Panel */}
+            <div className="print-hidden flex flex-wrap items-center gap-3 text-xs font-medium">
+              {/* Date Scope */}
+              <div className="flex items-center gap-1 rounded-md border border-input bg-background p-0.5 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setUnitHistoricalControls(prev => ({ ...prev, dateScope: "full" }))}
+                  className={`rounded px-2.5 py-1 transition-colors ${
+                    unitHistoricalControls.dateScope === "full"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Full Trend
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnitHistoricalControls(prev => ({ ...prev, dateScope: "comparison" }))}
+                  className={`rounded px-2.5 py-1 transition-colors ${
+                    unitHistoricalControls.dateScope === "comparison"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Selected Comparison
+                </button>
+              </div>
+
+              {/* Viz Mode */}
+              <div className="flex items-center gap-1 rounded-md border border-input bg-background p-0.5 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setUnitHistoricalControls(prev => ({ ...prev, vizMode: "bars", userSelectedVizMode: "bars" }))}
+                  className={`rounded px-2.5 py-1 transition-colors ${
+                    unitHistoricalControls.vizMode === "bars"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Grouped Bars
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnitHistoricalControls(prev => ({ ...prev, vizMode: "lines", userSelectedVizMode: "lines" }))}
+                  className={`rounded px-2.5 py-1 transition-colors ${
+                    unitHistoricalControls.vizMode === "lines"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Trend Lines
+                </button>
+              </div>
+
+              {/* Unit Visibility Limit */}
+              <div className="flex items-center gap-1 rounded-md border border-input bg-background p-0.5 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setUnitHistoricalControls(prev => ({ ...prev, unitVisibility: "all" }))}
+                  className={`rounded px-2.5 py-1 transition-colors ${
+                    unitHistoricalControls.unitVisibility === "all"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  All Units
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnitHistoricalControls(prev => ({ ...prev, unitVisibility: "top5" }))}
+                  className={`rounded px-2.5 py-1 transition-colors ${
+                    unitHistoricalControls.unitVisibility === "top5"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Top 5
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnitHistoricalControls(prev => ({ ...prev, unitVisibility: "top10" }))}
+                  className={`rounded px-2.5 py-1 transition-colors ${
+                    unitHistoricalControls.unitVisibility === "top10"
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Top 10
+                </button>
+              </div>
+
+              {/* Focus Unit Dropdown */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">Focus:</span>
+                <select
+                  value={unitHistoricalControls.focusUnit}
+                  onChange={(e) => setUnitHistoricalControls(prev => ({ ...prev, focusUnit: e.target.value }))}
+                  className="rounded-md border border-input bg-background px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="all">All Units</option>
+                  {allUnitNames.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Executive Insight Cards */}
+          {unitInsights && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              {/* Largest Increase Card */}
+              <div
+                onClick={() => unitInsights.largestIncrease && setDrilldownUnit(unitInsights.largestIncrease.unit)}
+                className="cursor-pointer rounded-lg border border-border bg-card p-4 hover:shadow-md transition hover:border-red-500/50 flex flex-col justify-between"
+              >
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Largest Increase</span>
+                  {unitInsights.largestIncrease ? (
+                    <div className="mt-1">
+                      <div className="text-lg font-bold text-foreground">{unitInsights.largestIncrease.unit}</div>
+                      <div className="text-sm font-semibold text-red-600 dark:text-red-400">
+                        +{formatValue(unitInsights.largestIncrease.delta)} kg
+                        {unitInsights.largestIncrease.pct !== null && (
+                          <span className="ml-1 text-xs font-bold">({unitInsights.largestIncrease.pct > 0 ? "+" : ""}{unitInsights.largestIncrease.pct.toFixed(1)}%)</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-xs text-muted-foreground italic">No increases detected</div>
+                  )}
+                </div>
+                <div className="mt-4 text-[10px] font-semibold text-primary/80 hover:text-primary transition flex items-center gap-1">
+                  <span>[View Details]</span>
+                </div>
+              </div>
+
+              {/* Largest Reduction Card */}
+              <div
+                onClick={() => unitInsights.largestReduction && setDrilldownUnit(unitInsights.largestReduction.unit)}
+                className="cursor-pointer rounded-lg border border-border bg-card p-4 hover:shadow-md transition hover:border-green-500/50 flex flex-col justify-between"
+              >
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Largest Reduction</span>
+                  {unitInsights.largestReduction ? (
+                    <div className="mt-1">
+                      <div className="text-lg font-bold text-foreground">{unitInsights.largestReduction.unit}</div>
+                      <div className="text-sm font-semibold text-green-600 dark:text-green-400">
+                        {formatValue(unitInsights.largestReduction.delta)} kg
+                        {unitInsights.largestReduction.pct !== null && (
+                          <span className="ml-1 text-xs font-bold">({unitInsights.largestReduction.pct.toFixed(1)}%)</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-xs text-muted-foreground italic">No reductions detected</div>
+                  )}
+                </div>
+                <div className="mt-4 text-[10px] font-semibold text-primary/80 hover:text-primary transition flex items-center gap-1">
+                  <span>[View Details]</span>
+                </div>
+              </div>
+
+              {/* Most Stable Card */}
+              <div
+                onClick={() => unitInsights.mostStable && setDrilldownUnit(unitInsights.mostStable.unit)}
+                className="cursor-pointer rounded-lg border border-border bg-card p-4 hover:shadow-md transition hover:border-blue-500/50 flex flex-col justify-between"
+              >
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Most Stable</span>
+                  {unitInsights.mostStable ? (
+                    <div className="mt-1">
+                      <div className="text-lg font-bold text-foreground">{unitInsights.mostStable.unit}</div>
+                      <div className="text-sm font-semibold text-blue-600 dark:text-blue-400">
+                        {unitInsights.mostStable.delta >= 0 ? "+" : ""}{formatValue(unitInsights.mostStable.delta)} kg
+                        {unitInsights.mostStable.pct !== null ? (
+                          <span className="ml-1 text-xs font-bold">({unitInsights.mostStable.pct >= 0 ? "+" : ""}{unitInsights.mostStable.pct.toFixed(1)}%)</span>
+                        ) : (
+                          <span className="ml-1 text-xs font-bold">(0.0%)</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-xs text-muted-foreground italic">No stable candidates</div>
+                  )}
+                </div>
+                <div className="mt-4 text-[10px] font-semibold text-primary/80 hover:text-primary transition flex items-center gap-1">
+                  <span>[View Details]</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Chart Rendering */}
+          {unitHistoricalControls.vizMode === "bars" ? (
+            unitGroupedBarDataset && (
+              <GroupedBarChart
+                data={unitGroupedBarDataset}
+                title={`${metricLabel} Comparison by Unit`}
+                formatValue={formatValue}
+                focusUnit={unitHistoricalControls.focusUnit}
+                onCategoryClick={setDrilldownUnit}
+              />
+            )
+          ) : (
+            unitMultiSeriesDataset && (
+              <MultiSeriesTrend
+                data={unitMultiSeriesDataset}
+                title={`${metricLabel} Trend by Unit`}
+                formatValue={formatValue}
+                focusUnit={unitHistoricalControls.focusUnit}
+                onSeriesClick={setDrilldownUnit}
+              />
+            )
+          )}
         </section>
 
         {/* Empty / loading state for the metric-driven charts */}
