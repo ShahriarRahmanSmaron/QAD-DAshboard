@@ -53,8 +53,6 @@ import {
 } from "./dashboard-utils";
 
 // Optimized Components
-import { UnitPerformanceMatrix } from "@/components/charts/unit-performance-matrix";
-import { BuyerComparisonView } from "@/components/charts/buyer-comparison-view";
 import { UnitExplorer } from "@/components/charts/unit-explorer";
 import { BuyerExplorer } from "@/components/charts/buyer-explorer";
 
@@ -101,6 +99,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
   // Collapse/Expand States (default collapsed)
   const [unitExplorerExpanded, setUnitExplorerExpanded] = useState(false);
   const [buyerExplorerExpanded, setBuyerExplorerExpanded] = useState(false);
+  const [insightsExpanded, setInsightsExpanded] = useState(false);
 
   const unitExplorerRef = useRef<HTMLDivElement>(null);
   const buyerExplorerRef = useRef<HTMLDivElement>(null);
@@ -113,8 +112,6 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     dateScope: "full" as "full" | "comparison",
   });
 
-  const setDrilldownUnit = handleUnitClick;
-  const selectExplorerBuyer = handleBuyerClick;
 
   useEffect(() => {
     setTimestamp(new Date().toLocaleString());
@@ -466,6 +463,32 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     if (!neg.length) return null;
     return [...neg].sort((a, b) => a.difference - b.difference)[0] ?? null;
   }, [unitComparisonDataset]);
+
+  const buyerComparisonDataset = useMemo(() => {
+    if (!buyerTrendQuery.data || !comparisonPair.current || !comparisonPair.previous) {
+      return null;
+    }
+    return trendToDateComparison(
+      buyerTrendQuery.data,
+      comparisonPair.current,
+      comparisonPair.previous,
+      { topN: 0 } // Get all buyers
+    );
+  }, [buyerTrendQuery.data, comparisonPair]);
+
+  const largestBuyerIncrease = useMemo(() => {
+    if (!buyerComparisonDataset || !buyerComparisonDataset.rows.length) return null;
+    const pos = buyerComparisonDataset.rows.filter((r) => r.difference > 0);
+    if (!pos.length) return null;
+    return [...pos].sort((a, b) => b.difference - a.difference)[0] ?? null;
+  }, [buyerComparisonDataset]);
+
+  const largestBuyerReduction = useMemo(() => {
+    if (!buyerComparisonDataset || !buyerComparisonDataset.rows.length) return null;
+    const neg = buyerComparisonDataset.rows.filter((r) => r.difference < 0);
+    if (!neg.length) return null;
+    return [...neg].sort((a, b) => a.difference - b.difference)[0] ?? null;
+  }, [buyerComparisonDataset]);
 
   // Insight Callouts: Cap at 3 increases, 3 reductions, and 2 stable units
   const insightCallouts = useMemo(() => {
@@ -836,16 +859,9 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                     <span className="font-semibold text-foreground">{formatShortDate(comparisonPair.previous)} ({comparisonPair.previous})</span>
                   </div>
                 )}
-              </div>
-            </div>
-
-            {/* Key KPI Stats */}
-            <div className="space-y-3.5 lg:col-span-1 lg:border-r lg:border-border/60 lg:pr-6">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Key Operational Metrics</h3>
-              <div className="space-y-2.5 text-xs">
                 {tStockKpi && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground font-medium">Total Stock (T/Stock):</span>
+                  <div className="flex justify-between items-center border-t border-border/40 pt-2 mt-2">
+                    <span className="text-muted-foreground font-medium">Total Stock:</span>
                     <div className="text-right">
                       <span className="font-bold text-foreground">{formatValue(tStockKpi.value as number)}</span>
                       {tStockKpi.deltaPercent !== null && tStockKpi.deltaPercent !== undefined && (
@@ -869,43 +885,100 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                     </div>
                   </div>
                 )}
-                {largestContributor && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground font-medium">Largest Contributor:</span>
-                    <div className="text-right">
-                      <span className="font-bold text-foreground">{largestContributor.label}</span>
-                      <span className="ml-1.5 text-xs font-bold text-red-500">
-                        (+{formatValue(largestContributor.difference)} kg)
-                      </span>
-                    </div>
-                  </div>
-                )}
-                {largestReduction && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground font-medium">Largest Reduction:</span>
-                    <div className="text-right">
-                      <span className="font-bold text-foreground">{largestReduction.label}</span>
-                      <span className="ml-1.5 text-xs font-bold text-green-500">
-                        ({formatValue(largestReduction.difference)} kg)
-                      </span>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
 
-            {/* Management Insights */}
-            <div className="space-y-3 lg:col-span-1">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Management Insights</h3>
-              {insightCallouts.length === 0 ? (
-                <p className="text-xs text-muted-foreground italic">No key backlog fluctuations detected in this period.</p>
-              ) : (
-                <div className="space-y-1.5 max-h-[120px] overflow-y-auto pr-1">
-                  {insightCallouts.map((callout, i) => (
-                    <div key={`callout-${i}`} className="text-xs text-foreground font-semibold leading-relaxed">
-                      {callout}
+            {/* Key Drivers Grid */}
+            <div className="lg:col-span-2 space-y-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Key Drivers (vs Previous)</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Card 1: Largest Unit Increase */}
+                <div className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm">
+                  <div className="text-[10px] font-bold uppercase text-muted-foreground">Largest Unit Increase</div>
+                  <div className="mt-1 flex items-baseline justify-between gap-2">
+                    <span className="font-semibold text-sm text-foreground truncate max-w-[120px]" title={largestContributor?.label ?? "N/A"}>
+                      {largestContributor?.label ?? "N/A"}
+                    </span>
+                    {largestContributor && (
+                      <span className="text-xs font-bold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded">
+                        +{formatValue(largestContributor.difference)} kg
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Card 2: Largest Unit Reduction */}
+                <div className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm">
+                  <div className="text-[10px] font-bold uppercase text-muted-foreground">Largest Unit Reduction</div>
+                  <div className="mt-1 flex items-baseline justify-between gap-2">
+                    <span className="font-semibold text-sm text-foreground truncate max-w-[120px]" title={largestReduction?.label ?? "N/A"}>
+                      {largestReduction?.label ?? "N/A"}
+                    </span>
+                    {largestReduction && (
+                      <span className="text-xs font-bold text-green-500 bg-green-500/10 px-1.5 py-0.5 rounded">
+                        {formatValue(largestReduction.difference)} kg
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Card 3: Largest Buyer Increase */}
+                <div className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm">
+                  <div className="text-[10px] font-bold uppercase text-muted-foreground">Largest Buyer Increase</div>
+                  <div className="mt-1 flex items-baseline justify-between gap-2">
+                    <span className="font-semibold text-sm text-foreground truncate max-w-[120px]" title={largestBuyerIncrease?.label ?? "N/A"}>
+                      {largestBuyerIncrease?.label ?? "N/A"}
+                    </span>
+                    {largestBuyerIncrease && (
+                      <span className="text-xs font-bold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded">
+                        +{formatValue(largestBuyerIncrease.difference)} kg
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Card 4: Largest Buyer Reduction */}
+                <div className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm">
+                  <div className="text-[10px] font-bold uppercase text-muted-foreground">Largest Buyer Reduction</div>
+                  <div className="mt-1 flex items-baseline justify-between gap-2">
+                    <span className="font-semibold text-sm text-foreground truncate max-w-[120px]" title={largestBuyerReduction?.label ?? "N/A"}>
+                      {largestBuyerReduction?.label ?? "N/A"}
+                    </span>
+                    {largestBuyerReduction && (
+                      <span className="text-xs font-bold text-green-500 bg-green-500/10 px-1.5 py-0.5 rounded">
+                        {formatValue(largestBuyerReduction.difference)} kg
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Detailed Insights collapsible view */}
+            <div className="lg:col-span-3 border-t border-border/60 pt-3">
+              <button
+                type="button"
+                onClick={() => setInsightsExpanded(!insightsExpanded)}
+                className="flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline transition-colors"
+              >
+                <span>{insightsExpanded ? "Hide Detailed Insights" : "Show Detailed Insights"}</span>
+                <span className={`transition-transform duration-200 text-[10px] ${insightsExpanded ? "rotate-180" : ""}`}>
+                  ▼
+                </span>
+              </button>
+              {insightsExpanded && (
+                <div className="mt-3 rounded-md bg-secondary/20 p-3.5 border border-border/40">
+                  {insightCallouts.length === 0 ? (
+                    <p className="text-xs text-muted-foreground italic">No key backlog fluctuations detected in this period.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+                      {insightCallouts.map((callout, i) => (
+                        <div key={`callout-${i}`} className="text-xs text-foreground font-medium leading-relaxed">
+                          {callout}
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
             </div>
@@ -959,7 +1032,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  Full Trend
+                  Trend View
                 </button>
                 <button
                   type="button"
@@ -970,7 +1043,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  Selected Comparison
+                  Comparison View
                 </button>
               </div>
 
@@ -1059,7 +1132,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               {/* Largest Increase Card */}
               <div
-                onClick={() => unitInsights.largestIncrease && setDrilldownUnit(unitInsights.largestIncrease.unit)}
+                onClick={() => unitInsights.largestIncrease && handleUnitClick(unitInsights.largestIncrease.unit)}
                 className="cursor-pointer rounded-lg border border-border bg-card p-4 hover:shadow-md transition hover:border-red-500/50 flex flex-col justify-between"
               >
                 <div>
@@ -1085,7 +1158,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
 
               {/* Largest Reduction Card */}
               <div
-                onClick={() => unitInsights.largestReduction && setDrilldownUnit(unitInsights.largestReduction.unit)}
+                onClick={() => unitInsights.largestReduction && handleUnitClick(unitInsights.largestReduction.unit)}
                 className="cursor-pointer rounded-lg border border-border bg-card p-4 hover:shadow-md transition hover:border-green-500/50 flex flex-col justify-between"
               >
                 <div>
@@ -1111,7 +1184,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
 
               {/* Most Stable Card */}
               <div
-                onClick={() => unitInsights.mostStable && setDrilldownUnit(unitInsights.mostStable.unit)}
+                onClick={() => unitInsights.mostStable && handleUnitClick(unitInsights.mostStable.unit)}
                 className="cursor-pointer rounded-lg border border-border bg-card p-4 hover:shadow-md transition hover:border-blue-500/50 flex flex-col justify-between"
               >
                 <div>
@@ -1147,7 +1220,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                 title={`${metricLabel} Comparison by Unit`}
                 formatValue={formatValue}
                 focusUnit={unitHistoricalControls.focusUnit}
-                onCategoryClick={setDrilldownUnit}
+                onCategoryClick={handleUnitClick}
               />
             )
           ) : (
@@ -1157,7 +1230,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                 title={`${metricLabel} Trend by Unit`}
                 formatValue={formatValue}
                 focusUnit={unitHistoricalControls.focusUnit}
-                onSeriesClick={setDrilldownUnit}
+                onSeriesClick={handleUnitClick}
               />
             )
           )}
@@ -1268,35 +1341,6 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
               </details>
             </section>
 
-            {/* Buyer Analysis Section */}
-            <section>
-              {buyerTrendQuery.data && comparisonPair.current && (
-                <BuyerComparisonView
-                  buyerTrend={buyerTrendQuery.data}
-                  currentDate={comparisonPair.current}
-                  previousDate={comparisonPair.previous}
-                  formatValue={formatValue}
-                  title="Buyer Analysis"
-                  onBuyerClick={handleBuyerClick}
-                />
-              )}
-            </section>
-
-            {/* Unit Analysis Section */}
-            <section>
-              {unitComparisonDataset ? (
-                <UnitPerformanceMatrix
-                  data={unitComparisonDataset}
-                  onUnitClick={handleUnitClick}
-                  formatValue={formatValue}
-                  title="Unit Analysis (Candidate for removal in MD09-4)"
-                />
-              ) : (
-                <div className="h-[200px] flex items-center justify-center rounded-lg border border-dashed border-border bg-card/50">
-                  <p className="text-sm text-muted-foreground">Loading unit rankings...</p>
-                </div>
-              )}
-            </section>
 
             {/* Phase 11: Diagnostics Section */}
             <details className="group rounded-lg border border-border bg-card shadow-sm open:pb-4">

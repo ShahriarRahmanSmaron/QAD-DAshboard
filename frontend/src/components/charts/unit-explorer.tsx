@@ -32,7 +32,7 @@ type UnitExplorerProps = {
   onBuyerClick?: (buyer: string) => void;
 };
 
-export function UnitExplorer({
+function UnitExplorerInner({
   selectedUnit,
   onUnitChange,
   availableUnits,
@@ -45,6 +45,7 @@ export function UnitExplorer({
   formatValue,
   onBuyerClick,
 }: UnitExplorerProps) {
+  const [activeTab, setActiveTab] = React.useState<"overview" | "trends" | "contributions" | "history">("overview");
   const format = formatValue ?? ((v: number) => Math.round(v).toLocaleString());
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -188,6 +189,24 @@ export function UnitExplorer({
         </div>
       </div>
 
+      {/* Styled Segmented Tabs */}
+      <div className="flex border-b border-border gap-1.5 pb-0.5">
+        {(["overview", "trends", "contributions", "history"] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-2 text-sm font-semibold capitalize transition-all border-b-2 -mb-[3px] ${
+              activeTab === tab
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
       {isLoading && (
         <div className="flex h-32 items-center justify-center rounded-lg border border-border bg-card">
           <p className="text-sm text-muted-foreground animate-pulse">Loading {activeUnit} data...</p>
@@ -196,50 +215,73 @@ export function UnitExplorer({
 
       {!isLoading && (
         <>
-          {/* Phase 3: Unit KPI Cards (Current/Previous) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {kpiValue && (
-              <KpiCard
-                kpi={kpiValue}
-                formatValue={(v) => (typeof v === "number" ? format(v) : v)}
-                showSparkline
-              />
-            )}
-            
-            {/* Top Contributing Buyer */}
-            {buyerContribQuery.data && (
-              <TopContributingBuyerCard 
-                data={buyerContribQuery.data} 
-                latestDate={latestDate} 
-                formatValue={format} 
-              />
-            )}
-            
-            {/* Largest Buyer Increase */}
-            <BuyerMoverCard type="increase" mover={increases[0]} formatValue={format} onBuyerClick={onBuyerClick} />
-            
-            {/* Largest Buyer Reduction */}
-            <BuyerMoverCard type="reduction" mover={reductions[0]} formatValue={format} onBuyerClick={onBuyerClick} />
-          </div>
+          {/* OVERVIEW TAB */}
+          {activeTab === "overview" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {kpiValue && (
+                <KpiCard
+                  kpi={kpiValue}
+                  formatValue={(v) => (typeof v === "number" ? format(v) : v)}
+                  showSparkline
+                />
+              )}
+              
+              {/* Top Contributing Buyer */}
+              {buyerContribQuery.data && (
+                <TopContributingBuyerCard 
+                  data={buyerContribQuery.data} 
+                  latestDate={latestDate} 
+                  formatValue={format} 
+                />
+              )}
+              
+              {/* Largest Buyer Increase */}
+              <BuyerMoverCard type="increase" mover={increases[0]} formatValue={format} onBuyerClick={onBuyerClick} />
+              
+              {/* Largest Buyer Reduction */}
+              <BuyerMoverCard type="reduction" mover={reductions[0]} formatValue={format} onBuyerClick={onBuyerClick} />
+            </div>
+          )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Phase 4: Unit Trend Chart */}
-            <div className="rounded-lg border border-border bg-card shadow-sm">
-              <div className="p-4 border-b border-border">
-                <h3 className="text-sm font-semibold">{activeUnit} — {metricLabel} Trend</h3>
+          {/* TRENDS TAB */}
+          {activeTab === "trends" && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Phase 4: Unit Trend Chart */}
+              <div className="rounded-lg border border-border bg-card shadow-sm">
+                <div className="p-4 border-b border-border">
+                  <h3 className="text-sm font-semibold">{activeUnit} — {metricLabel} Trend</h3>
+                </div>
+                <div className="p-4">
+                  {trendDataset && (
+                    <MultiSeriesTrend
+                      data={trendDataset}
+                      title=""
+                      formatValue={format}
+                    />
+                  )}
+                </div>
               </div>
-              <div className="p-4">
-                {trendDataset && (
-                  <MultiSeriesTrend
-                    data={trendDataset}
-                    title=""
-                    formatValue={format}
-                  />
-                )}
+
+              {/* Phase 6: Buyer Contribution Trend */}
+              <div className="rounded-lg border border-border bg-card shadow-sm">
+                <div className="p-4 border-b border-border">
+                  <h3 className="text-sm font-semibold">Buyer Contribution Trend for {activeUnit}</h3>
+                </div>
+                <div className="p-4">
+                  {buyerTrendDataset && (
+                    <MultiSeriesTrend
+                      data={buyerTrendDataset}
+                      title=""
+                      formatValue={format}
+                    />
+                  )}
+                </div>
               </div>
             </div>
+          )}
 
-            {/* Phase 5: Buyer Contribution Inside Unit */}
+          {/* CONTRIBUTIONS TAB */}
+          {activeTab === "contributions" && (
             <div className="rounded-lg border border-border bg-card shadow-sm">
               {buyerContribQuery.data && previousDate && (
                 <BuyerComparisonView
@@ -251,77 +293,68 @@ export function UnitExplorer({
                 />
               )}
             </div>
-          </div>
+          )}
 
-          {/* Phase 6: Buyer Contribution Trend */}
-          <div className="rounded-lg border border-border bg-card shadow-sm">
-            <div className="p-4 border-b border-border">
-              <h3 className="text-sm font-semibold">Buyer Contribution Trend for {activeUnit}</h3>
-            </div>
-            <div className="p-4">
-              {buyerTrendDataset && (
-                <MultiSeriesTrend
-                  data={buyerTrendDataset}
-                  title=""
-                  formatValue={format}
-                />
-              )}
-            </div>
-          </div>
+          {/* HISTORY TAB */}
+          {activeTab === "history" && (
+            <div className="space-y-6">
+              {/* Phase 7: Buyer Movers inside Unit */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="rounded-lg border border-border bg-card shadow-sm p-4">
+                  <h3 className="text-sm font-semibold text-red-600 mb-3">Largest Buyer Increases</h3>
+                  <MoversTable movers={increases} formatValue={format} onBuyerClick={onBuyerClick} />
+                </div>
+                <div className="rounded-lg border border-border bg-card shadow-sm p-4">
+                  <h3 className="text-sm font-semibold text-green-600 mb-3">Largest Buyer Reductions</h3>
+                  <MoversTable movers={reductions} formatValue={format} onBuyerClick={onBuyerClick} />
+                </div>
+              </div>
 
-          {/* Phase 7: Buyer Movers inside Unit */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="rounded-lg border border-border bg-card shadow-sm p-4">
-              <h3 className="text-sm font-semibold text-red-600 mb-3">Largest Buyer Increases</h3>
-              <MoversTable movers={increases} formatValue={format} onBuyerClick={onBuyerClick} />
+              {/* Phase 8: Unit History Table */}
+              <div className="rounded-lg border border-border bg-card shadow-sm p-4">
+                <h3 className="text-sm font-semibold mb-3">Unit History Table: {activeUnit}</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left uppercase text-muted-foreground text-xs">
+                        <th className="px-3 py-2">Date</th>
+                        <th className="px-3 py-2 text-right">Value</th>
+                        <th className="px-3 py-2 text-right">Delta</th>
+                        <th className="px-3 py-2 text-right">% Change</th>
+                        <th className="px-3 py-2 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyTableRows.map((row) => (
+                        <tr key={row.date} className="border-b border-border/50 last:border-0 hover:bg-muted/40">
+                          <td className="px-3 py-2.5 font-medium text-foreground">{formatShortDate(row.date)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-foreground">{format(row.value)}</td>
+                          <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${row.diff && row.diff > 0 ? "text-red-500" : row.diff && row.diff < 0 ? "text-green-500" : "text-muted-foreground"}`}>
+                            {row.diff !== null ? `${row.diff > 0 ? "+" : ""}${format(row.diff)}` : "—"}
+                          </td>
+                          <td className={`px-3 py-2.5 text-right tabular-nums ${row.diff && row.diff > 0 ? "text-red-500" : row.diff && row.diff < 0 ? "text-green-500" : "text-muted-foreground"}`}>
+                            {row.pct !== null ? `${row.pct > 0 ? "+" : ""}${row.pct.toFixed(1)}%` : "—"}
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${row.status === "Deteriorated" ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" : row.status === "Improved" ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
+                              {row.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-            <div className="rounded-lg border border-border bg-card shadow-sm p-4">
-              <h3 className="text-sm font-semibold text-green-600 mb-3">Largest Buyer Reductions</h3>
-              <MoversTable movers={reductions} formatValue={format} onBuyerClick={onBuyerClick} />
-            </div>
-          </div>
-
-          {/* Phase 8: Unit History Table */}
-          <div className="rounded-lg border border-border bg-card shadow-sm p-4">
-            <h3 className="text-sm font-semibold mb-3">Unit History Table: {activeUnit}</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left uppercase text-muted-foreground text-xs">
-                    <th className="px-3 py-2">Date</th>
-                    <th className="px-3 py-2 text-right">Value</th>
-                    <th className="px-3 py-2 text-right">Delta</th>
-                    <th className="px-3 py-2 text-right">% Change</th>
-                    <th className="px-3 py-2 text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historyTableRows.map((row) => (
-                    <tr key={row.date} className="border-b border-border/50 last:border-0 hover:bg-muted/40">
-                      <td className="px-3 py-2.5 font-medium text-foreground">{formatShortDate(row.date)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-foreground">{format(row.value)}</td>
-                      <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${row.diff && row.diff > 0 ? "text-red-500" : row.diff && row.diff < 0 ? "text-green-500" : "text-muted-foreground"}`}>
-                        {row.diff !== null ? `${row.diff > 0 ? "+" : ""}${format(row.diff)}` : "—"}
-                      </td>
-                      <td className={`px-3 py-2.5 text-right tabular-nums ${row.diff && row.diff > 0 ? "text-red-500" : row.diff && row.diff < 0 ? "text-green-500" : "text-muted-foreground"}`}>
-                        {row.pct !== null ? `${row.pct > 0 ? "+" : ""}${row.pct.toFixed(1)}%` : "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-right">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${row.status === "Deteriorated" ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" : row.status === "Improved" ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
-                          {row.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          )}
         </>
       )}
     </div>
   );
 }
+
+export const UnitExplorer = React.memo(UnitExplorerInner);
 
 type TopContributingBuyerCardProps = {
   data: OperationalTrendResponse | undefined;

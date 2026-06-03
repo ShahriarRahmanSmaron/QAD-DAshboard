@@ -31,7 +31,7 @@ type BuyerExplorerProps = {
   formatValue?: (value: number) => string;
 };
 
-export function BuyerExplorer({
+function BuyerExplorerInner({
   selectedBuyer,
   onBuyerChange,
   onUnitClick,
@@ -44,6 +44,7 @@ export function BuyerExplorer({
   previousDate,
   formatValue,
 }: BuyerExplorerProps) {
+  const [activeTab, setActiveTab] = React.useState<"overview" | "trends" | "contributions" | "history">("overview");
   const format = formatValue ?? ((v: number) => Math.round(v).toLocaleString());
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -211,6 +212,24 @@ export function BuyerExplorer({
         </div>
       </div>
 
+      {/* Styled Segmented Tabs */}
+      <div className="flex border-b border-border gap-1.5 pb-0.5">
+        {(["overview", "trends", "contributions", "history"] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-2 text-sm font-semibold capitalize transition-all border-b-2 -mb-[3px] ${
+              activeTab === tab
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
       {isLoading && (
         <div className="flex h-32 items-center justify-center rounded-lg border border-border bg-card">
           <p className="text-sm text-muted-foreground animate-pulse">Loading {activeBuyer} data...</p>
@@ -219,95 +238,121 @@ export function BuyerExplorer({
 
       {!isLoading && (
         <>
-          {/* Buyer Explorer Comparison Mode Header Card */}
-          {previousDate && kpiValue && (
-            <div className="rounded-lg border border-border/80 bg-accent/5 p-5 shadow-sm">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
-                <RefreshCw className="size-3.5 text-primary" />
-                Buyer Comparison Overview ({activeBuyer})
-              </h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="space-y-1">
-                  <span className="text-xs text-muted-foreground font-medium">Previous ({formatShortDate(previousDate)})</span>
-                  <div className="text-xl font-bold text-foreground">
-                    {kpiValue.previousValue !== null ? format(kpiValue.previousValue as number) : "—"} <span className="text-xs text-muted-foreground">kg</span>
+          {/* OVERVIEW TAB */}
+          {activeTab === "overview" && (
+            <div className="space-y-6">
+              {/* Buyer Explorer Comparison Mode Header Card */}
+              {previousDate && kpiValue && (
+                <div className="rounded-lg border border-border/80 bg-accent/5 p-5 shadow-sm">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+                    <RefreshCw className="size-3.5 text-primary" />
+                    Buyer Comparison Overview ({activeBuyer})
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="space-y-1">
+                      <span className="text-xs text-muted-foreground font-medium">Previous ({formatShortDate(previousDate)})</span>
+                      <div className="text-xl font-bold text-foreground">
+                        {kpiValue.previousValue !== null ? format(kpiValue.previousValue as number) : "—"} <span className="text-xs text-muted-foreground">kg</span>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-xs text-muted-foreground font-medium">Current ({formatShortDate(latestDate)})</span>
+                      <div className="text-xl font-bold text-foreground">
+                        {kpiValue.value !== null ? format(kpiValue.value as number) : "—"} <span className="text-xs text-muted-foreground">kg</span>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-xs text-muted-foreground font-medium">Delta Absolute</span>
+                      <div className={`text-xl font-bold flex items-center gap-1 ${
+                        (kpiValue.delta ?? 0) > 0 ? "text-red-500" : (kpiValue.delta ?? 0) < 0 ? "text-green-500" : "text-foreground"
+                      }`}>
+                        {(kpiValue.delta ?? 0) > 0 ? <ArrowUpRight className="size-5" /> : (kpiValue.delta ?? 0) < 0 ? <ArrowDownRight className="size-5" /> : null}
+                        {kpiValue.delta !== null && kpiValue.delta !== undefined ? `${kpiValue.delta > 0 ? "+" : ""}${format(kpiValue.delta)}` : "—"}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-xs text-muted-foreground font-medium">Percentage Change</span>
+                      <div className={`text-xl font-bold ${
+                        (kpiValue.deltaPercent ?? 0) > 0 ? "text-red-500" : (kpiValue.deltaPercent ?? 0) < 0 ? "text-green-500" : "text-foreground"
+                      }`}>
+                        {kpiValue.deltaPercent !== null && kpiValue.deltaPercent !== undefined
+                          ? `${kpiValue.deltaPercent > 0 ? "+" : ""}${kpiValue.deltaPercent.toFixed(1)}%`
+                          : "—"}
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="space-y-1">
-                  <span className="text-xs text-muted-foreground font-medium">Current ({formatShortDate(latestDate)})</span>
-                  <div className="text-xl font-bold text-foreground">
-                    {kpiValue.value !== null ? format(kpiValue.value as number) : "—"} <span className="text-xs text-muted-foreground">kg</span>
-                  </div>
+              )}
+
+              {/* Buyer KPI Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {kpiValue && (
+                  <KpiCard
+                    kpi={kpiValue}
+                    formatValue={(v) => (typeof v === "number" ? format(v) : v)}
+                    showSparkline
+                  />
+                )}
+
+                {/* Top Contributing Unit Card */}
+                {unitContribQuery.data && (
+                  <TopContributingUnitCard
+                    data={unitContribQuery.data}
+                    latestDate={latestDate}
+                    formatValue={format}
+                  />
+                )}
+
+                {/* Largest Unit Increase Card */}
+                <UnitMoverCard type="increase" mover={increases[0]} formatValue={format} onUnitClick={onUnitClick} />
+
+                {/* Largest Unit Reduction Card */}
+                <UnitMoverCard type="reduction" mover={reductions[0]} formatValue={format} onUnitClick={onUnitClick} />
+              </div>
+            </div>
+          )}
+
+          {/* TRENDS TAB */}
+          {activeTab === "trends" && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Buyer Trend Chart */}
+              <div className="rounded-lg border border-border bg-card shadow-sm">
+                <div className="p-4 border-b border-border flex justify-between items-center">
+                  <h3 className="text-sm font-semibold">{activeBuyer} — {metricLabel} Trend</h3>
+                  <ChartExportButtons containerRef={containerRef} filename={`${activeBuyer}_Trend_${latestDate}`} />
                 </div>
-                <div className="space-y-1">
-                  <span className="text-xs text-muted-foreground font-medium">Delta Absolute</span>
-                  <div className={`text-xl font-bold flex items-center gap-1 ${
-                    (kpiValue.delta ?? 0) > 0 ? "text-red-500" : (kpiValue.delta ?? 0) < 0 ? "text-green-500" : "text-foreground"
-                  }`}>
-                    {(kpiValue.delta ?? 0) > 0 ? <ArrowUpRight className="size-5" /> : (kpiValue.delta ?? 0) < 0 ? <ArrowDownRight className="size-5" /> : null}
-                    {kpiValue.delta !== null && kpiValue.delta !== undefined ? `${kpiValue.delta > 0 ? "+" : ""}${format(kpiValue.delta)}` : "—"}
-                  </div>
+                <div className="p-4">
+                  {trendDataset && (
+                    <MultiSeriesTrend
+                      data={trendDataset}
+                      title=""
+                      formatValue={format}
+                    />
+                  )}
                 </div>
-                <div className="space-y-1">
-                  <span className="text-xs text-muted-foreground font-medium">Percentage Change</span>
-                  <div className={`text-xl font-bold ${
-                    (kpiValue.deltaPercent ?? 0) > 0 ? "text-red-500" : (kpiValue.deltaPercent ?? 0) < 0 ? "text-green-500" : "text-foreground"
-                  }`}>
-                    {kpiValue.deltaPercent !== null && kpiValue.deltaPercent !== undefined
-                      ? `${kpiValue.deltaPercent > 0 ? "+" : ""}${kpiValue.deltaPercent.toFixed(1)}%`
-                      : "—"}
-                  </div>
+              </div>
+
+              {/* Unit Contribution Trend */}
+              <div className="rounded-lg border border-border bg-card shadow-sm">
+                <div className="p-4 border-b border-border flex justify-between items-center">
+                  <h3 className="text-sm font-semibold">Unit Contribution Trend for {activeBuyer}</h3>
+                  <ChartExportButtons containerRef={containerRef} filename={`${activeBuyer}_Unit_Contribution_Trend`} />
+                </div>
+                <div className="p-4">
+                  {unitTrendDataset && (
+                    <MultiSeriesTrend
+                      data={unitTrendDataset}
+                      title=""
+                      formatValue={format}
+                    />
+                  )}
                 </div>
               </div>
             </div>
           )}
 
-          {/* Buyer KPI Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {kpiValue && (
-              <KpiCard
-                kpi={kpiValue}
-                formatValue={(v) => (typeof v === "number" ? format(v) : v)}
-                showSparkline
-              />
-            )}
-
-            {/* Top Contributing Unit Card */}
-            {unitContribQuery.data && (
-              <TopContributingUnitCard
-                data={unitContribQuery.data}
-                latestDate={latestDate}
-                formatValue={format}
-              />
-            )}
-
-            {/* Largest Unit Increase Card */}
-            <UnitMoverCard type="increase" mover={increases[0]} formatValue={format} onUnitClick={onUnitClick} />
-
-            {/* Largest Unit Reduction Card */}
-            <UnitMoverCard type="reduction" mover={reductions[0]} formatValue={format} onUnitClick={onUnitClick} />
-          </div>
-
-          {/* Main charts section */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Buyer Trend Chart */}
-            <div className="rounded-lg border border-border bg-card shadow-sm">
-              <div className="p-4 border-b border-border flex justify-between items-center">
-                <h3 className="text-sm font-semibold">{activeBuyer} — {metricLabel} Trend</h3>
-                <ChartExportButtons containerRef={containerRef} filename={`${activeBuyer}_Trend_${latestDate}`} />
-              </div>
-              <div className="p-4">
-                {trendDataset && (
-                  <MultiSeriesTrend
-                    data={trendDataset}
-                    title=""
-                    formatValue={format}
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* Unit Contribution to Buyer (Grouped/Comparison Chart) */}
+          {/* CONTRIBUTIONS TAB */}
+          {activeTab === "contributions" && (
             <div className="rounded-lg border border-border bg-card shadow-sm">
               <div className="p-4 border-b border-border flex justify-between items-center">
                 <h3 className="text-sm font-semibold">Unit Contribution inside {activeBuyer}</h3>
@@ -325,94 +370,84 @@ export function BuyerExplorer({
                 )}
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Unit Contribution Trend */}
-          <div className="rounded-lg border border-border bg-card shadow-sm">
-            <div className="p-4 border-b border-border flex justify-between items-center">
-              <h3 className="text-sm font-semibold">Unit Contribution Trend for {activeBuyer}</h3>
-              <ChartExportButtons containerRef={containerRef} filename={`${activeBuyer}_Unit_Contribution_Trend`} />
-            </div>
-            <div className="p-4">
-              {unitTrendDataset && (
-                <MultiSeriesTrend
-                  data={unitTrendDataset}
-                  title=""
-                  formatValue={format}
-                />
-              )}
-            </div>
-          </div>
-
-          {/* Unit Movers Tables */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="rounded-lg border border-border bg-card shadow-sm p-4">
-              <h3 className="text-sm font-semibold text-red-600 mb-3">Largest Unit Increases</h3>
-              <UnitMoversTable movers={increases} formatValue={format} onUnitClick={onUnitClick} />
-            </div>
-            <div className="rounded-lg border border-border bg-card shadow-sm p-4">
-              <h3 className="text-sm font-semibold text-green-600 mb-3">Largest Unit Reductions</h3>
-              <UnitMoversTable movers={reductions} formatValue={format} onUnitClick={onUnitClick} />
-            </div>
-          </div>
-
-          {/* Buyer History Table & Summary Row */}
-          <div className="rounded-lg border border-border bg-card shadow-sm p-4">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="text-sm font-semibold">Buyer History Table: {activeBuyer}</h3>
-              {summaryStats && (
-                <div className="text-xs bg-muted/50 rounded-md px-3 py-1.5 flex flex-wrap gap-x-4 gap-y-1 font-medium text-muted-foreground border border-border/40">
-                  <div>Min: <span className="font-bold text-foreground">{format(summaryStats.min)}</span></div>
-                  <div>Max: <span className="font-bold text-foreground">{format(summaryStats.max)}</span></div>
-                  <div>Avg: <span className="font-bold text-foreground">{format(summaryStats.avg)}</span></div>
-                  <div>Latest: <span className="font-bold text-foreground">{format(summaryStats.latest)}</span></div>
-                  <div>
-                    Change vs First ({formatShortDate(summaryStats.firstDate)}):{" "}
-                    <span className={`font-bold ${summaryStats.changeAbs > 0 ? "text-red-500" : summaryStats.changeAbs < 0 ? "text-green-500" : "text-foreground"}`}>
-                      {summaryStats.changeAbs > 0 ? "+" : ""}{format(summaryStats.changeAbs)} ({summaryStats.changePct > 0 ? "+" : ""}{summaryStats.changePct.toFixed(1)}%)
-                    </span>
-                  </div>
+          {/* HISTORY TAB */}
+          {activeTab === "history" && (
+            <div className="space-y-6">
+              {/* Unit Movers Tables */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="rounded-lg border border-border bg-card shadow-sm p-4">
+                  <h3 className="text-sm font-semibold text-red-600 mb-3">Largest Unit Increases</h3>
+                  <UnitMoversTable movers={increases} formatValue={format} onUnitClick={onUnitClick} />
                 </div>
-              )}
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left uppercase text-muted-foreground text-xs">
-                    <th className="px-3 py-2">Date</th>
-                    <th className="px-3 py-2 text-right">Value</th>
-                    <th className="px-3 py-2 text-right">Delta</th>
-                    <th className="px-3 py-2 text-right">% Change</th>
-                    <th className="px-3 py-2 text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historyTableRows.map((row) => (
-                    <tr key={row.date} className="border-b border-border/50 last:border-0 hover:bg-muted/40">
-                      <td className="px-3 py-2.5 font-medium text-foreground">{formatShortDate(row.date)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-foreground">{format(row.value)}</td>
-                      <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${row.diff && row.diff > 0 ? "text-red-500" : row.diff && row.diff < 0 ? "text-green-500" : "text-muted-foreground"}`}>
-                        {row.diff !== null ? `${row.diff > 0 ? "+" : ""}${format(row.diff)}` : "—"}
-                      </td>
-                      <td className={`px-3 py-2.5 text-right tabular-nums ${row.diff && row.diff > 0 ? "text-red-500" : row.diff && row.diff < 0 ? "text-green-500" : "text-muted-foreground"}`}>
-                        {row.pct !== null ? `${row.pct > 0 ? "+" : ""}${row.pct.toFixed(1)}%` : "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-right">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${row.status === "Deteriorated" ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" : row.status === "Improved" ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
-                          {row.status}
+                <div className="rounded-lg border border-border bg-card shadow-sm p-4">
+                  <h3 className="text-sm font-semibold text-green-600 mb-3">Largest Unit Reductions</h3>
+                  <UnitMoversTable movers={reductions} formatValue={format} onUnitClick={onUnitClick} />
+                </div>
+              </div>
+
+              {/* Buyer History Table & Summary Row */}
+              <div className="rounded-lg border border-border bg-card shadow-sm p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="text-sm font-semibold">Buyer History Table: {activeBuyer}</h3>
+                  {summaryStats && (
+                    <div className="text-xs bg-muted/50 rounded-md px-3 py-1.5 flex flex-wrap gap-x-4 gap-y-1 font-medium text-muted-foreground border border-border/40">
+                      <div>Min: <span className="font-bold text-foreground">{format(summaryStats.min)}</span></div>
+                      <div>Max: <span className="font-bold text-foreground">{format(summaryStats.max)}</span></div>
+                      <div>Avg: <span className="font-bold text-foreground">{format(summaryStats.avg)}</span></div>
+                      <div>Latest: <span className="font-bold text-foreground">{format(summaryStats.latest)}</span></div>
+                      <div>
+                        Change vs First ({formatShortDate(summaryStats.firstDate)}):{" "}
+                        <span className={`font-bold ${summaryStats.changeAbs > 0 ? "text-red-500" : summaryStats.changeAbs < 0 ? "text-green-500" : "text-foreground"}`}>
+                          {summaryStats.changeAbs > 0 ? "+" : ""}{format(summaryStats.changeAbs)} ({summaryStats.changePct > 0 ? "+" : ""}{summaryStats.changePct.toFixed(1)}%)
                         </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left uppercase text-muted-foreground text-xs">
+                        <th className="px-3 py-2">Date</th>
+                        <th className="px-3 py-2 text-right">Value</th>
+                        <th className="px-3 py-2 text-right">Delta</th>
+                        <th className="px-3 py-2 text-right">% Change</th>
+                        <th className="px-3 py-2 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyTableRows.map((row) => (
+                        <tr key={row.date} className="border-b border-border/50 last:border-0 hover:bg-muted/40">
+                          <td className="px-3 py-2.5 font-medium text-foreground">{formatShortDate(row.date)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-foreground">{format(row.value)}</td>
+                          <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${row.diff && row.diff > 0 ? "text-red-500" : row.diff && row.diff < 0 ? "text-green-500" : "text-muted-foreground"}`}>
+                            {row.diff !== null ? `${row.diff > 0 ? "+" : ""}${format(row.diff)}` : "—"}
+                          </td>
+                          <td className={`px-3 py-2.5 text-right tabular-nums ${row.diff && row.diff > 0 ? "text-red-500" : row.diff && row.diff < 0 ? "text-green-500" : "text-muted-foreground"}`}>
+                            {row.pct !== null ? `${row.pct > 0 ? "+" : ""}${row.pct.toFixed(1)}%` : "—"}
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${row.status === "Deteriorated" ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" : row.status === "Improved" ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
+                              {row.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
     </div>
   );
 }
+
+export const BuyerExplorer = React.memo(BuyerExplorerInner);
 
 // ---------------------------------------------------------------------------
 // Helper Sub-Components
