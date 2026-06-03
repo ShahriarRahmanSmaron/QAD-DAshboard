@@ -119,7 +119,7 @@ export function MultiSeriesTrend({
                 name={data.seriesLabels[key] ?? key}
                 stroke={colorFor[key]}
                 strokeWidth={isFocused ? 3 : 1.5}
-                strokeOpacity={isFocused ? 1.0 : 0.15}
+                strokeOpacity={isFocused ? 1.0 : 0.20}
                 dot={false}
                 activeDot={isFocused ? { r: 4, strokeWidth: 2 } : false}
                 onClick={() => onSeriesClick?.(key)}

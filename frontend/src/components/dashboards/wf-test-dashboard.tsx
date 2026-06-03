@@ -103,6 +103,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
 
   const unitExplorerRef = useRef<HTMLDivElement>(null);
   const buyerExplorerRef = useRef<HTMLDivElement>(null);
+  const unitHistoricalRef = useRef<HTMLDivElement>(null);
 
   const [unitHistoricalControls, setUnitHistoricalControls] = useState({
     vizMode: "bars" as "bars" | "lines",
@@ -679,18 +680,16 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     const reductions = results.filter(r => r.delta < 0).sort((a, b) => a.delta - b.delta);
     const largestReduction = reductions[0] ?? null;
 
-    const stableCandidates = results.filter(r => r.presentInBoth);
+    // Most Stable = smallest absolute percentage movement.
+    // Pure ranking — no exclusion of largestIncrease/largestReduction.
+    // Only consider units present in both dates with firstVal > 0 (or both zero).
+    const stableCandidates = results.filter(r =>
+      r.presentInBoth && (r.firstVal > 0 || r.lastVal === 0)
+    );
     const mostStable = [...stableCandidates].sort((a, b) => {
-      const pctA = a.firstVal === 0 ? (a.lastVal === 0 ? 0 : null) : Math.abs(a.pct ?? 0);
-      const pctB = b.firstVal === 0 ? (b.lastVal === 0 ? 0 : null) : Math.abs(b.pct ?? 0);
-
-      if (pctA !== null && pctB !== null) {
-        if (pctA !== pctB) return pctA - pctB;
-      } else if (pctA !== null) {
-        return -1;
-      } else if (pctB !== null) {
-        return 1;
-      }
+      const absPctA = a.firstVal === 0 ? 0 : Math.abs((a.lastVal - a.firstVal) / a.firstVal) * 100;
+      const absPctB = b.firstVal === 0 ? 0 : Math.abs((b.lastVal - b.firstVal) / b.firstVal) * 100;
+      if (absPctA !== absPctB) return absPctA - absPctB;
       return Math.abs(a.delta) - Math.abs(b.delta);
     })[0] ?? null;
 
@@ -893,7 +892,10 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
               <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Key Drivers (vs Previous)</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Card 1: Largest Unit Increase */}
-                <div className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm">
+                <div
+                  className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm cursor-pointer hover:shadow-md transition hover:border-red-500/50"
+                  onClick={() => largestContributor && handleUnitClick(largestContributor.key)}
+                >
                   <div className="text-[10px] font-bold uppercase text-muted-foreground">Largest Unit Increase</div>
                   <div className="mt-1 flex items-baseline justify-between gap-2">
                     <span className="font-semibold text-sm text-foreground truncate max-w-[120px]" title={largestContributor?.label ?? "N/A"}>
@@ -908,7 +910,10 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                 </div>
 
                 {/* Card 2: Largest Unit Reduction */}
-                <div className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm">
+                <div
+                  className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm cursor-pointer hover:shadow-md transition hover:border-green-500/50"
+                  onClick={() => largestReduction && handleUnitClick(largestReduction.key)}
+                >
                   <div className="text-[10px] font-bold uppercase text-muted-foreground">Largest Unit Reduction</div>
                   <div className="mt-1 flex items-baseline justify-between gap-2">
                     <span className="font-semibold text-sm text-foreground truncate max-w-[120px]" title={largestReduction?.label ?? "N/A"}>
@@ -923,7 +928,10 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                 </div>
 
                 {/* Card 3: Largest Buyer Increase */}
-                <div className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm">
+                <div
+                  className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm cursor-pointer hover:shadow-md transition hover:border-red-500/50"
+                  onClick={() => largestBuyerIncrease && handleBuyerClick(largestBuyerIncrease.key)}
+                >
                   <div className="text-[10px] font-bold uppercase text-muted-foreground">Largest Buyer Increase</div>
                   <div className="mt-1 flex items-baseline justify-between gap-2">
                     <span className="font-semibold text-sm text-foreground truncate max-w-[120px]" title={largestBuyerIncrease?.label ?? "N/A"}>
@@ -938,7 +946,10 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                 </div>
 
                 {/* Card 4: Largest Buyer Reduction */}
-                <div className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm">
+                <div
+                  className="rounded-lg border border-border bg-card/45 p-3 flex flex-col justify-between shadow-sm cursor-pointer hover:shadow-md transition hover:border-green-500/50"
+                  onClick={() => largestBuyerReduction && handleBuyerClick(largestBuyerReduction.key)}
+                >
                   <div className="text-[10px] font-bold uppercase text-muted-foreground">Largest Buyer Reduction</div>
                   <div className="mt-1 flex items-baseline justify-between gap-2">
                     <span className="font-semibold text-sm text-foreground truncate max-w-[120px]" title={largestBuyerReduction?.label ?? "N/A"}>
@@ -994,23 +1005,32 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
             {kpiQuery.isLoading
               ? kpiMetrics.map((m) => <KpiSkeleton key={m.value} />)
               : (kpiQuery.data ?? []).map(({ trend, label }) => (
-                  <KpiCard
+                  <div
                     key={label}
-                    kpi={trendToLatestKpi(trend, label, {
-                      currentDate: state.selectedCurrentDate,
-                      previousDate: state.selectedComparisonDate,
-                    })}
-                    formatValue={(v) =>
-                      typeof v === "number" ? formatValue(v) : v
-                    }
-                    showSparkline
-                  />
+                    className="cursor-pointer hover:shadow-md transition-shadow rounded-lg"
+                    onClick={() => {
+                      if (unitHistoricalRef.current) {
+                        unitHistoricalRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }
+                    }}
+                  >
+                    <KpiCard
+                      kpi={trendToLatestKpi(trend, label, {
+                        currentDate: state.selectedCurrentDate,
+                        previousDate: state.selectedComparisonDate,
+                      })}
+                      formatValue={(v) =>
+                        typeof v === "number" ? formatValue(v) : v
+                      }
+                      showSparkline
+                    />
+                  </div>
                 ))}
           </div>
         </section>
 
         {/* Unit Historical Comparison Restoration Section */}
-        <section className="rounded-lg border border-border bg-card p-5 shadow-sm space-y-6" data-focus-unit={unitHistoricalControls.focusUnit} data-unit-visibility={unitHistoricalControls.unitVisibility} data-date-scope={unitHistoricalControls.dateScope}>
+        <section ref={unitHistoricalRef} className="scroll-mt-6 rounded-lg border border-border bg-card p-5 shadow-sm space-y-6" data-focus-unit={unitHistoricalControls.focusUnit} data-unit-visibility={unitHistoricalControls.unitVisibility} data-date-scope={unitHistoricalControls.dateScope}>
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border/55 pb-3">
             <div>
               <h2 className="text-lg font-semibold text-foreground">Unit Historical Comparison</h2>
@@ -1249,29 +1269,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
 
         {!isLoading && hasData && (
           <>
-            {/* Phase 2 & 5: Smart Trend Visualization */}
-            <section>
-              <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-                {metricLabel} Trend &amp; Date Comparison by {groupLabel(dim)}
-              </h2>
-              {displayDates.length < 7 ? (
-                groupedBarDataset && (
-                  <GroupedBarChart
-                    data={groupedBarDataset}
-                    title={`${metricLabel} by ${groupLabel(dim)} — Date Comparison (< 7 dates)`}
-                    formatValue={formatValue}
-                  />
-                )
-              ) : (
-                multiSeriesDataset && (
-                  <MultiSeriesTrend
-                    data={multiSeriesDataset}
-                    title={`${metricLabel} Trend per ${groupLabel(dim)} (>= 7 dates)`}
-                    formatValue={formatValue}
-                  />
-                )
-              )}
-            </section>
+
 
             {/* Unit Explorer Section */}
             <section ref={unitExplorerRef} className="scroll-mt-6">
@@ -1290,19 +1288,25 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                   </span>
                 </summary>
                 <div className="px-4 pt-2 border-t border-border mt-2">
-                  <UnitExplorer
-                    selectedUnit={explorerUnit}
-                    onUnitChange={setExplorerUnit}
-                    availableUnits={availableUnits}
-                    metric={state.metric}
-                    metricLabel={metricLabel}
-                    reportTypeId={state.reportTypeId}
-                    dateWindow={dateWindow}
-                    latestDate={comparisonPair.current!}
-                    previousDate={comparisonPair.previous}
-                    formatValue={formatValue}
-                    onBuyerClick={handleBuyerClick}
-                  />
+                  {unitExplorerExpanded ? (
+                    <UnitExplorer
+                      selectedUnit={explorerUnit}
+                      onUnitChange={setExplorerUnit}
+                      availableUnits={availableUnits}
+                      metric={state.metric}
+                      metricLabel={metricLabel}
+                      reportTypeId={state.reportTypeId}
+                      dateWindow={dateWindow}
+                      latestDate={comparisonPair.current!}
+                      previousDate={comparisonPair.previous}
+                      formatValue={formatValue}
+                      onBuyerClick={handleBuyerClick}
+                    />
+                  ) : (
+                    <div className="flex h-24 items-center justify-center text-sm text-muted-foreground italic">
+                      Select a unit to investigate
+                    </div>
+                  )}
                 </div>
               </details>
             </section>
@@ -1324,19 +1328,25 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
                   </span>
                 </summary>
                 <div className="px-4 pt-2 border-t border-border mt-2">
-                  <BuyerExplorer
-                    selectedBuyer={explorerBuyer}
-                    onBuyerChange={setExplorerBuyer}
-                    onUnitClick={handleUnitClick}
-                    availableBuyers={availableBuyers}
-                    metric={state.metric}
-                    metricLabel={metricLabel}
-                    reportTypeId={state.reportTypeId}
-                    dateWindow={dateWindow}
-                    latestDate={comparisonPair.current!}
-                    previousDate={comparisonPair.previous}
-                    formatValue={formatValue}
-                  />
+                  {buyerExplorerExpanded ? (
+                    <BuyerExplorer
+                      selectedBuyer={explorerBuyer}
+                      onBuyerChange={setExplorerBuyer}
+                      onUnitClick={handleUnitClick}
+                      availableBuyers={availableBuyers}
+                      metric={state.metric}
+                      metricLabel={metricLabel}
+                      reportTypeId={state.reportTypeId}
+                      dateWindow={dateWindow}
+                      latestDate={comparisonPair.current!}
+                      previousDate={comparisonPair.previous}
+                      formatValue={formatValue}
+                    />
+                  ) : (
+                    <div className="flex h-24 items-center justify-center text-sm text-muted-foreground italic">
+                      Select a buyer to investigate
+                    </div>
+                  )}
                 </div>
               </details>
             </section>

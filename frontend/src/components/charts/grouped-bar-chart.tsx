@@ -132,7 +132,7 @@ export function GroupedBarChart({
                   <Cell
                     key={`cell-${entryIdx}`}
                     fill={getColor(index)}
-                    fillOpacity={isFocused ? 1.0 : 0.15}
+                    fillOpacity={isFocused ? 1.0 : 0.25}
                   />
                 );
               })}
