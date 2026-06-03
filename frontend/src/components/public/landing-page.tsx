@@ -360,6 +360,7 @@ export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
   const kpis = snapshot?.kpis ?? [];
   const insights = snapshot?.insights ?? [];
   const trends = snapshot?.trends ?? [];
+  const previewCharts = snapshot?.preview_charts;
 
   function openLogin() {
     if (isAuthenticated) {
@@ -610,6 +611,64 @@ export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
               <div className="mt-8 pt-6 border-t border-[#b1ada1]/30 flex items-center justify-between">
                 <span className="text-xs text-[#78716c] dark:text-[#a8a29e]">Uploaded {relativeTime(workbook.uploaded_at)}</span>
               </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ====== PREVIEW CHARTS ====== */}
+      {previewCharts && (previewCharts.unit_comparison?.length > 0 || previewCharts.buyer_comparison?.length > 0) && (
+        <section className="px-4 py-16 sm:px-8 bg-[#f4f3ee] dark:bg-[#1c1917] border-t border-[#b1ada1]/40">
+          <div className="mx-auto max-w-5xl">
+            <div className="mb-8 text-center sm:text-left">
+              <span className="text-xs font-semibold uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block mb-1">Data Preview</span>
+              <h2 className="text-2xl font-bold tracking-tight text-[#1c1917] dark:text-white">
+                Unit & Buyer Comparisons
+              </h2>
+            </div>
+            
+            <div className="grid md:grid-cols-2 gap-8">
+              {/* Unit Comparison */}
+              {previewCharts.unit_comparison?.length > 0 && (
+                <div className="border border-[#b1ada1]/40 bg-white dark:bg-[#292524] p-6 rounded-lg shadow-sm">
+                  <h3 className="text-sm font-semibold uppercase tracking-wider text-[#78716c] dark:text-[#a8a29e] mb-6">
+                    Top 5 Units (Current vs Previous)
+                  </h3>
+                  <div className="h-64 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={previewCharts.unit_comparison} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(177, 173, 161, 0.2)" vertical={false} />
+                        <XAxis dataKey="label" stroke="rgba(177, 173, 161, 0.4)" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} />
+                        <YAxis stroke="rgba(177, 173, 161, 0.4)" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : String(v)} />
+                        <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "0.5rem", color: "var(--foreground)", fontSize: 12 }} />
+                        <Bar dataKey="current_value" name="Current" fill="#c15f3c" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="previous_value" name="Previous" fill="rgba(177, 173, 161, 0.6)" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {/* Buyer Comparison */}
+              {previewCharts.buyer_comparison?.length > 0 && (
+                <div className="border border-[#b1ada1]/40 bg-white dark:bg-[#292524] p-6 rounded-lg shadow-sm">
+                  <h3 className="text-sm font-semibold uppercase tracking-wider text-[#78716c] dark:text-[#a8a29e] mb-6">
+                    Top 5 Buyers (Current vs Previous)
+                  </h3>
+                  <div className="h-64 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={previewCharts.buyer_comparison} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(177, 173, 161, 0.2)" vertical={false} />
+                        <XAxis dataKey="label" stroke="rgba(177, 173, 161, 0.4)" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} />
+                        <YAxis stroke="rgba(177, 173, 161, 0.4)" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : String(v)} />
+                        <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "0.5rem", color: "var(--foreground)", fontSize: 12 }} />
+                        <Bar dataKey="current_value" name="Current" fill="#c15f3c" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="previous_value" name="Previous" fill="rgba(177, 173, 161, 0.6)" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </section>

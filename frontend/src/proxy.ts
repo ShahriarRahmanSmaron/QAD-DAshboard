@@ -11,6 +11,7 @@ const PUBLIC_FILE_PATTERN = /\.(.*)$/;
 
 function isPublicPath(pathname: string) {
   return (
+    pathname === "/" ||
     pathname === "/login" ||
     pathname.startsWith("/api/auth/") ||
     pathname.startsWith("/_next/") ||

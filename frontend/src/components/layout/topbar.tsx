@@ -19,7 +19,7 @@ export function Topbar({ user }: TopbarProps) {
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
-    router.replace("/login");
+    router.replace("/");
     router.refresh();
   }
 
