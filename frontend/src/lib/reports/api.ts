@@ -225,6 +225,8 @@ export type OperationalTrendParams = {
   metric: string;
   buyer?: string;
   unit?: string;
+  sub_unit?: string;
+  department?: string;
   section?: string;
   report_type_id?: string;
   date_from?: string;
@@ -245,6 +247,8 @@ export type OperationalComparisonParams = {
   previous_date?: string;
   buyer?: string;
   unit?: string;
+  sub_unit?: string;
+  department?: string;
   section?: string;
   report_type_id?: string;
 };
@@ -256,8 +260,15 @@ export function getOperationalComparison(params: OperationalComparisonParams) {
   );
 }
 
-export function getOperationalDimensions(reportTypeId?: string) {
-  const query = operationalParams({ report_type_id: reportTypeId });
+export function getOperationalDimensions(
+  reportTypeId?: string,
+  dimFilters?: Record<string, string>,
+) {
+  const params: Record<string, unknown> = { report_type_id: reportTypeId };
+  if (dimFilters && Object.keys(dimFilters).length > 0) {
+    params.dim_filters = JSON.stringify(dimFilters);
+  }
+  const query = operationalParams(params);
   return request<OperationalDimensionsResponse>(
     `/api/reports/operations/dimensions${query ? `?${query}` : ""}`,
   );

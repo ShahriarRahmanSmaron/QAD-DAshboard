@@ -196,7 +196,7 @@ export function ChartBuilderPage() {
   // ---------------------------------------------------------------------------
 
   const reportTypes: ReportTypeOption[] = reportTypesQuery.data?.report_types ?? [];
-  const metrics: OperationalDimensionOption[] = dimensionsQuery.data?.metrics ?? [];
+  const metrics: OperationalDimensionOption[] = dimensionsQuery.data?.dimensions?.metric ?? [];
   const selectedReportTypeName = reportTypes.find((rt) => rt.id === selectedReportTypeId)?.name;
   const selectedMetricLabel = metrics.find((m) => m.value === selectedMetric)?.label ?? selectedMetric;
   const chartExportParams = useMemo(() => {

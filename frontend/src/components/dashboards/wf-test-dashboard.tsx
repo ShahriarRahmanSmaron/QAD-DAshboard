@@ -155,7 +155,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
 
   const reportTypes = reportTypesQuery.data?.report_types ?? [];
   const metrics = useMemo(
-    () => dimensionsQuery.data?.metrics ?? [],
+    () => dimensionsQuery.data?.dimensions?.metric ?? [],
     [dimensionsQuery.data],
   );
 
@@ -210,9 +210,9 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
     const first = metrics[0];
     if (!first) return;
     if (!state.metric) {
-      const preferred = metrics.find((m) => m.value === "wait_for_test") ?? first;
+      const preferred = metrics.find((m: any) => m.value === "wait_for_test") ?? first;
       patch({ metric: preferred.value });
-    } else if (!metrics.some((m) => m.value === state.metric)) {
+    } else if (!metrics.some((m: any) => m.value === state.metric)) {
       // Reset an invalid metric when the report type changes.
       patch({ metric: first.value });
     }
@@ -363,7 +363,7 @@ export function WfTestDashboard({ user }: { user?: AuthUser }) {
   // ---------------------------------------------------------------------------
   const groupedTrend: OperationalTrendResponse | undefined = groupedTrendQuery.data;
   const metricLabel =
-    metrics.find((m) => m.value === state.metric)?.label ?? state.metric;
+    metrics.find((m: any) => m.value === state.metric)?.label ?? state.metric;
   const dim = state.groupDimension;
 
   const multiSeriesDataset = useMemo(() => {

@@ -507,6 +507,8 @@ def derive_metric_label(header_text: str | None) -> str:
     cleaned = _clean_header_text(header_text)
     if not cleaned:
         return "Unmapped"
+    if cleaned.upper() == "PD%":
+        return "PD%"
     # Preserve all-caps short codes; otherwise Title Case for readability.
     if len(cleaned) <= 4 and cleaned.isupper():
         return cleaned
@@ -517,7 +519,10 @@ def derive_metric_key(header_text: str | None) -> str | None:
     """Stable slug key derived from a workbook column header."""
     if not header_text:
         return None
-    return slugify(_clean_header_text(header_text))
+    cleaned = _clean_header_text(header_text)
+    if cleaned.upper() == "PD%":
+        return "pd_percent"
+    return slugify(cleaned)
 
 
 def normalize_section_label(value: str | None) -> str:
@@ -665,3 +670,25 @@ def normalize_fact_dimensions(
         "operational_section_label": canonical_section_label(section_key),
         "report_date": normalize_report_date(report_date),
     }
+
+
+def is_pd_summary_workbook(workbook_metadata: JsonObject) -> bool:
+    """Detect if the workbook metadata corresponds to a PD Summary report."""
+    all_text = []
+    for sheet in workbook_metadata.get("sheets", []):
+        if not isinstance(sheet, dict):
+            continue
+        for cell in sheet.get("cells", []):
+            if not isinstance(cell, dict):
+                continue
+            val = cell.get("value")
+            if val is not None:
+                all_text.append(str(val))
+    joined = " ".join(all_text).upper()
+    return (
+        "REPORTING DATE" in joined
+        and "RESPONSIBLE DEPARTMENT" in joined
+        and "PD QTY(KG)" in joined
+        and "PD%" in joined
+        and ("OVERALL SUMMARY (SOLID)" in joined or "OVERALL SUMMARY (AOP)" in joined)
+    )

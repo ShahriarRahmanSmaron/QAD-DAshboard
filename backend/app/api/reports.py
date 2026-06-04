@@ -142,6 +142,8 @@ async def list_operational_facts(
     uploaded_file_id: UUID | None = None,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     buyer_id: UUID | None = None,
     unit_id: UUID | None = None,
     metric: str | None = None,
@@ -161,6 +163,8 @@ async def list_operational_facts(
         uploaded_file_id=uploaded_file_id,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         buyer_id=buyer_id,
         unit_id=unit_id,
         metric_key=metric,
@@ -273,6 +277,8 @@ async def get_operational_summary(
     uploaded_file_id: UUID | None = None,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     metric: str | None = None,
     section: str | None = None,
     report_type_id: UUID | None = None,
@@ -285,6 +291,8 @@ async def get_operational_summary(
         uploaded_file_id=uploaded_file_id,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         metric_key=metric,
         operational_section=section,
         report_type_id=report_type_id,
@@ -312,6 +320,8 @@ async def get_operational_aggregation(
     uploaded_file_id: UUID | None = None,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     buyer_id: UUID | None = None,
     unit_id: UUID | None = None,
     metric: str | None = None,
@@ -339,6 +349,8 @@ async def get_operational_aggregation(
         uploaded_file_id=uploaded_file_id,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         buyer_id=buyer_id,
         unit_id=unit_id,
         metric_key=metric,
@@ -372,6 +384,8 @@ async def get_operational_trend(
     metric: Annotated[str, Query(min_length=1)],
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     section: str | None = None,
     report_type_id: UUID | None = None,
     date_from: date | None = None,
@@ -386,6 +400,8 @@ async def get_operational_trend(
         metric_key=metric,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         operational_section=section,
         report_type_id=report_type_id,
         date_from=date_from,
@@ -413,6 +429,8 @@ async def get_operational_comparison(
     previous_date: date | None = None,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     section: str | None = None,
     report_type_id: UUID | None = None,
     classification: str | None = None,
@@ -420,11 +438,6 @@ async def get_operational_comparison(
     """Compare operational totals between two specific dates."""
     curr_date = current_report_date or current_date
     comp_date = comparison_report_date or previous_date
-    if not curr_date or not comp_date:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Both current_report_date (or current_date) and comparison_report_date (or previous_date) are required.",
-        )
     comparison = await repository.get_operational_comparison(
         session,
         user=user,
@@ -433,6 +446,8 @@ async def get_operational_comparison(
         previous_date=comp_date,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         operational_section=section,
         report_type_id=report_type_id,
         classification=classification,
@@ -440,19 +455,30 @@ async def get_operational_comparison(
     return serialize_operational_comparison(comparison)
 
 
+import json
+
 @router.get("/operations/dimensions", response_model=OperationalDimensionsResponse)
 async def get_operational_dimensions(
     session: SessionDep,
     user: ReportReaderDep,
     report_type_id: UUID | None = None,
+    # MD-OPQ01: JSON-encoded cascading filters e.g. '{"unit":"Color City Ltd"}'
+    dim_filters: str | None = None,
 ) -> OperationalDimensionsResponse:
     """Distinct buyer/unit/metric/section/date values for filter dropdowns.
 
     MD07-5 Phase 4: scoped by ``report_type_id`` when supplied so dropdowns
     only surface dimensions from the selected report type.
     """
+    parsed: dict[str, str] | None = None
+    if dim_filters:
+        try:
+            parsed = json.loads(dim_filters)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+
     data = await repository.list_operational_dimensions(
-        session, user=user, report_type_id=report_type_id
+        session, user=user, report_type_id=report_type_id, dim_filters=parsed
     )
     return serialize_operational_dimensions(data)
 
@@ -474,6 +500,8 @@ async def export_operational_query(
     uploaded_file_id: UUID | None = None,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     buyer_id: UUID | None = None,
     unit_id: UUID | None = None,
     metric: str | None = None,
@@ -493,6 +521,8 @@ async def export_operational_query(
         uploaded_file_id=uploaded_file_id,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         buyer_id=buyer_id,
         unit_id=unit_id,
         metric_key=metric,
@@ -538,6 +568,8 @@ async def export_operational_query(
                 "uploaded_file_id": str(uploaded_file_id) if uploaded_file_id else None,
                 "buyer": buyer,
                 "unit": unit,
+                "sub_unit": sub_unit,
+                "department": department,
                 "buyer_id": str(buyer_id) if buyer_id else None,
                 "unit_id": str(unit_id) if unit_id else None,
                 "metric": metric,

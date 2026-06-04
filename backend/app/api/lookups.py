@@ -34,6 +34,8 @@ async def list_units(session: SessionDep, _user: ReaderDep) -> UnitListResponse:
     return UnitListResponse(units=[UnitOption.model_validate(unit) for unit in units])
 
 
+from app.reporting.parser_registry import get_manifest
+
 @router.get("/report-types", response_model=ReportTypeListFlatResponse)
 async def list_report_types(session: SessionDep, _user: ReaderDep) -> ReportTypeListFlatResponse:
     """Dynamic report-type registry (MD07-5 Phase 5).
@@ -57,6 +59,7 @@ async def list_report_types(session: SessionDep, _user: ReaderDep) -> ReportType
                 version=item["report_type"].version,
                 is_active=item["report_type"].is_active,
                 active_workbooks=item["active_workbooks"],
+                manifest=get_manifest(item["report_type"].code),
             )
             for item in report_types_with_counts
         ]

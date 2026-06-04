@@ -207,6 +207,30 @@ export type UnitOption = {
   is_active: boolean;
 };
 
+export type DimensionCategory = "business" | "time" | "system";
+
+export type Dimension = {
+  key: string;
+  label: string;
+  type: "select" | "date" | "text";
+  category: DimensionCategory;
+  visible: boolean;
+  searchable: boolean;
+  groupable: boolean;
+  required: boolean;    // future: form validation
+  editable: boolean;    // future: data-entry form
+  order: number;
+  depends_on?: string;
+};
+
+export type ParserManifest = {
+  parser_code: string;
+  display_name: string;
+  dimensions: Dimension[];
+  default_grouping: string[];
+  hidden_dimensions: string[];
+};
+
 export type ReportTypeOption = {
   id: string;
   code: string;
@@ -215,6 +239,8 @@ export type ReportTypeOption = {
   version: number;
   is_active: boolean;
   active_workbooks: number;
+  // MD-OPQ01: full manifest from parser_registry.py — null if unregistered
+  manifest: ParserManifest | null;
 };
 
 export type BuyerListResponse = {
@@ -377,10 +403,8 @@ export type OperationalDimensionOption = {
 };
 
 export type OperationalDimensionsResponse = {
-  buyers: OperationalDimensionOption[];
-  units: OperationalDimensionOption[];
-  metrics: OperationalDimensionOption[];
-  sections: OperationalDimensionOption[];
+  /** Generic map: dimension key → options. { buyer: [...], sub_unit: [...] } */
+  dimensions: Record<string, OperationalDimensionOption[]>;
   dates: OperationalDimensionOption[];
 };
 

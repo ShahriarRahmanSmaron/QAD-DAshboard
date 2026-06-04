@@ -109,6 +109,8 @@ def serialize_operational_fact(fact: OperationalFact) -> OperationalFactResponse
         unit_id=fact.unit_id,
         buyer=fact.buyer,
         unit=fact.unit,
+        sub_unit=fact.sub_unit,
+        department=fact.department,
         report_date=fact.report_date,
         metric_key=fact.metric_key,
         metric_label=fact.metric_label,
@@ -316,19 +318,16 @@ def _workbook_source_refs(rows: Any) -> list[OperationalWorkbookSourceRef]:
 
 
 def serialize_operational_dimensions(
-    data: dict[str, list[dict[str, Any]]],
+    data: dict[str, Any],
 ) -> OperationalDimensionsResponse:
     def _options(rows: list[dict[str, Any]]) -> list[OperationalDimensionOption]:
         return [
-            OperationalDimensionOption(value=str(row["value"]), label=str(row["label"]))
-            for row in rows
+            OperationalDimensionOption(value=str(r["value"]), label=str(r["label"]))
+            for r in rows
         ]
-
+    raw: dict[str, list[dict[str, Any]]] = data.get("dimensions", {})
     return OperationalDimensionsResponse(
-        buyers=_options(data.get("buyers", [])),
-        units=_options(data.get("units", [])),
-        metrics=_options(data.get("metrics", [])),
-        sections=_options(data.get("sections", [])),
+        dimensions={key: _options(rows) for key, rows in raw.items()},
         dates=_options(data.get("dates", [])),
     )
 

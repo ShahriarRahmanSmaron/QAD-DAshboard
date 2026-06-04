@@ -75,6 +75,8 @@ def _filter_rows(filters: OperationalFactFilters, group_by: list[str] | None) ->
         ["uploaded_file_id", filters.uploaded_file_id],
         ["buyer", filters.buyer],
         ["unit", filters.unit],
+        ["sub_unit", filters.sub_unit],
+        ["department", filters.department],
         ["buyer_id", filters.buyer_id],
         ["unit_id", filters.unit_id],
         ["metric", filters.metric_key],
@@ -138,6 +140,8 @@ async def build_operational_query_xlsx(
     if filters.metric_key: active_filters.append(f"Metric: {filters.metric_key}")
     if filters.buyer: active_filters.append(f"Buyer: {filters.buyer}")
     if filters.unit: active_filters.append(f"Unit: {filters.unit}")
+    if filters.sub_unit: active_filters.append(f"Sub Unit: {filters.sub_unit}")
+    if filters.department: active_filters.append(f"Department: {filters.department}")
     if filters.date_from or filters.date_to: active_filters.append(f"Date: {filters.date_from or 'Start'} -> {filters.date_to or 'End'}")
     if filters.report_date: active_filters.append(f"Selected: {filters.report_date}")
     if filters.search: active_filters.append(f"Search: {filters.search}")
@@ -227,6 +231,8 @@ async def build_operational_query_xlsx(
         ["Metric", filters.metric_key or "All Metrics"],
         ["Buyer", filters.buyer or "All Buyers"],
         ["Unit", filters.unit or "All Units"],
+        ["Sub Unit", filters.sub_unit or "All Sub Units"],
+        ["Department", filters.department or "All Departments"],
         ["Date Range", date_range_str],
         ["Selected Dates", _stringify(filters.report_date) if filters.report_date else "None"],
         ["Active Search Filters", filters.search or "None"],
@@ -245,6 +251,8 @@ async def build_trend_xlsx(
     metric_key: str,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     operational_section: str | None = None,
     report_type_id: Any = None,
     date_from: date | None = None,
@@ -259,6 +267,8 @@ async def build_trend_xlsx(
         metric_key=metric_key,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         operational_section=operational_section,
         report_type_id=report_type_id,
         date_from=date_from,
@@ -303,6 +313,8 @@ async def build_trend_xlsx(
             ["metric", metric_key],
             ["buyer", buyer],
             ["unit", unit],
+            ["sub_unit", sub_unit],
+            ["department", department],
             ["section", operational_section],
             ["report_type_id", report_type_id],
             ["date_from", date_from],

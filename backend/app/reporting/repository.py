@@ -608,6 +608,8 @@ class OperationalFactFilters:
     uploaded_file_id: UUID | None = None
     buyer: str | None = None
     unit: str | None = None
+    sub_unit: str | None = None
+    department: str | None = None
     buyer_id: UUID | None = None
     unit_id: UUID | None = None
     metric_key: str | None = None
@@ -651,6 +653,10 @@ def _operational_fact_filters(
         clauses.append(func.lower(OperationalFact.buyer) == filters.buyer.strip().lower())
     if filters.unit:
         clauses.append(func.lower(OperationalFact.unit) == filters.unit.strip().lower())
+    if filters.sub_unit:
+        clauses.append(func.lower(OperationalFact.sub_unit) == filters.sub_unit.strip().lower())
+    if filters.department:
+        clauses.append(func.lower(OperationalFact.department) == filters.department.strip().lower())
     if filters.buyer_id is not None:
         clauses.append(OperationalFact.buyer_id == filters.buyer_id)
     if filters.unit_id is not None:
@@ -695,6 +701,36 @@ def _operational_fact_filters(
     return clauses
 
 
+async def resolve_latest_date_if_needed(
+    session: AsyncSession,
+    user: AuthUser,
+    filters: OperationalFactFilters,
+) -> OperationalFactFilters:
+    """If no report date/range is specified, and report_type is PD Summary, auto-select the latest date."""
+    if filters.report_type_id and filters.report_date is None and filters.date_from is None and filters.date_to is None:
+        rt_stmt = select(ReportType.code).where(ReportType.id == filters.report_type_id)
+        rt_code = (await session.execute(rt_stmt)).scalar_one_or_none()
+        if rt_code and rt_code.lower() == "pd_summary":
+            latest_date_stmt = (
+                select(func.max(OperationalFact.report_date))
+                .select_from(OperationalFact)
+                .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+                .where(
+                    UploadedFile.report_type_id == filters.report_type_id,
+                    OperationalFact.deleted_at.is_(None),
+                    OperationalFact.is_active.is_(True),
+                    UploadedFile.deleted_at.is_(None),
+                    UploadedFile.is_active_workbook.is_(True),
+                    UploadedFile.archived_at.is_(None),
+                    _uploaded_file_access_filter(user),
+                )
+            )
+            latest_date = (await session.execute(latest_date_stmt)).scalar_one_or_none()
+            if latest_date:
+                return replace(filters, report_date=latest_date)
+    return filters
+
+
 async def list_operational_facts(
     session: AsyncSession,
     *,
@@ -715,6 +751,7 @@ async def list_operational_facts(
         metric_key=metric_key,
         report_date=report_date,
     )
+    resolved = await resolve_latest_date_if_needed(session, user, resolved)
     clauses = _operational_fact_filters(user, resolved)
 
     total_result = await session.execute(
@@ -759,6 +796,7 @@ async def summarize_operational_facts(
         metric_key=metric_key,
         report_date=report_date,
     )
+    resolved = await resolve_latest_date_if_needed(session, user, resolved)
     clauses = _operational_fact_filters(user, _with_default_grain(resolved))
 
     stmt = (
@@ -807,6 +845,8 @@ async def summarize_operational_facts(
 _AGGREGATION_DIMENSIONS: dict[str, Any] = {
     "buyer": OperationalFact.buyer,
     "unit": OperationalFact.unit,
+    "sub_unit": OperationalFact.sub_unit,      # MD-OPQ01
+    "department": OperationalFact.department,    # MD-OPQ01
     "metric": OperationalFact.metric_key,
     "section": OperationalFact.operational_section,
     "report_date": OperationalFact.report_date,
@@ -848,7 +888,8 @@ async def aggregate_operational_facts(
     grand total is returned. A single aggregate query backs both buyer/unit/
     section totals and arbitrary multi-dimension grouping to avoid N+1.
     """
-    clauses = _operational_fact_filters(user, _with_default_grain(filters))
+    resolved = await resolve_latest_date_if_needed(session, user, filters)
+    clauses = _operational_fact_filters(user, _with_default_grain(resolved))
     requested = [key for key in (group_by or []) if key in _AGGREGATION_DIMENSIONS]
 
     numeric_total = func.coalesce(func.sum(OperationalFact.value_numeric), 0).label(
@@ -902,6 +943,8 @@ async def get_operational_trend(
     metric_key: str,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     operational_section: str | None = None,
     report_type_id: UUID | None = None,
     date_from: date | None = None,
@@ -926,6 +969,8 @@ async def get_operational_trend(
         metric_key=metric_key,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         operational_section=operational_section,
         report_type_id=report_type_id,
         date_from=date_from,
@@ -984,6 +1029,8 @@ async def get_nearest_previous_date(
     metric_key: str | None = None,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     operational_section: str | None = None,
     report_type_id: UUID | None = None,
 ) -> date | None:
@@ -996,6 +1043,8 @@ async def get_nearest_previous_date(
         metric_key=metric_key,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         operational_section=operational_section,
         report_type_id=report_type_id,
     )
@@ -1017,10 +1066,12 @@ async def get_operational_comparison(
     *,
     user: AuthUser,
     metric_key: str,
-    current_date: date,
+    current_date: date | None = None,
     previous_date: date | None = None,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     operational_section: str | None = None,
     report_type_id: UUID | None = None,
     classification: str | None = None,
@@ -1035,7 +1086,36 @@ async def get_operational_comparison(
     MD07-3 Phase 4: also resolves the source workbook(s) feeding each side so
     the comparison panel can show exactly where the values originate.
     """
-    if previous_date is None:
+    if current_date is None:
+        dummy_filters = OperationalFactFilters(
+            report_type_id=report_type_id,
+            metric_key=metric_key,
+            buyer=buyer,
+            unit=unit,
+            sub_unit=sub_unit,
+            department=department,
+            operational_section=operational_section,
+        )
+        resolved_filters = await resolve_latest_date_if_needed(session, user, dummy_filters)
+        current_date = resolved_filters.report_date
+        if current_date is None:
+            max_date_stmt = (
+                select(func.max(OperationalFact.report_date))
+                .select_from(OperationalFact)
+                .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+                .where(
+                    UploadedFile.report_type_id == report_type_id if report_type_id else true(),
+                    OperationalFact.deleted_at.is_(None),
+                    OperationalFact.is_active.is_(True),
+                    UploadedFile.deleted_at.is_(None),
+                    UploadedFile.is_active_workbook.is_(True),
+                    UploadedFile.archived_at.is_(None),
+                    _uploaded_file_access_filter(user),
+                )
+            )
+            current_date = (await session.execute(max_date_stmt)).scalar_one_or_none()
+
+    if previous_date is None and current_date is not None:
         previous_date = await get_nearest_previous_date(
             session,
             user=user,
@@ -1043,6 +1123,8 @@ async def get_operational_comparison(
             metric_key=metric_key,
             buyer=buyer,
             unit=unit,
+            sub_unit=sub_unit,
+            department=department,
             operational_section=operational_section,
             report_type_id=report_type_id,
         )
@@ -1054,6 +1136,8 @@ async def get_operational_comparison(
             metric_key=metric_key,
             buyer=buyer,
             unit=unit,
+            sub_unit=sub_unit,
+            department=department,
             operational_section=operational_section,
             report_type_id=report_type_id,
             report_date=target,
@@ -1081,6 +1165,8 @@ async def get_operational_comparison(
         metric_key=metric_key,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         operational_section=operational_section,
         report_type_id=report_type_id,
     )
@@ -1091,6 +1177,8 @@ async def get_operational_comparison(
         metric_key=metric_key,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         operational_section=operational_section,
         report_type_id=report_type_id,
     )
@@ -1098,6 +1186,8 @@ async def get_operational_comparison(
         "metric_key": metric_key,
         "buyer": buyer,
         "unit": unit,
+        "sub_unit": sub_unit,
+        "department": department,
         "operational_section": operational_section,
         "current_date": current_date,
         "previous_date": previous_date,
@@ -1116,6 +1206,8 @@ async def get_workbook_sources_for_date(
     metric_key: str | None = None,
     buyer: str | None = None,
     unit: str | None = None,
+    sub_unit: str | None = None,
+    department: str | None = None,
     operational_section: str | None = None,
     report_type_id: UUID | None = None,
 ) -> list[dict[str, Any]]:
@@ -1131,6 +1223,8 @@ async def get_workbook_sources_for_date(
         metric_key=metric_key,
         buyer=buyer,
         unit=unit,
+        sub_unit=sub_unit,
+        department=department,
         operational_section=operational_section,
         report_type_id=report_type_id,
         report_date=report_date,
@@ -1173,30 +1267,61 @@ async def get_accessible_operational_fact(
     return result.scalar_one_or_none()
 
 
+from app.reporting.parser_registry import get_manifest
+
+# All first-class columns on OperationalFact that can be queried as dimensions.
+# When a manifest key matches here, a fast indexed SQL query is used.
+# Unknown keys (future parsers) would need to be added here too.
+_DIMENSION_COLUMN_MAP: dict[str, Any] = {
+    "buyer":      OperationalFact.buyer,
+    "unit":       OperationalFact.unit,
+    "sub_unit":   OperationalFact.sub_unit,      # first-class column — MD-OPQ01
+    "department": OperationalFact.department,    # first-class column — MD-OPQ01
+    "metric":     OperationalFact.metric_key,
+    "section":    OperationalFact.operational_section,
+}
+_DIMENSION_LABEL_MAP: dict[str, Any] = {
+    "buyer":      OperationalFact.buyer,
+    "unit":       OperationalFact.unit,
+    "sub_unit":   OperationalFact.sub_unit,
+    "department": OperationalFact.department,
+    "metric":     OperationalFact.metric_label,
+    "section":    OperationalFact.operational_section_label,
+}
+
+
 async def list_operational_dimensions(
     session: AsyncSession,
     *,
     user: AuthUser,
     report_type_id: UUID | None = None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Return distinct filter options that actually appear in operational facts.
+    dim_filters: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Return generic dimension options keyed by dimension key.
 
-    Powers the operational query panel dropdowns (buyer / unit / metric /
-    section) without forcing the UI to scan the full fact list. Each query is
-    a single grouped round-trip, so this stays N+1 free.
-
-    MD07-2B: dropdowns surface only *active* facts, so legacy composite /
-    ambiguous buyers (soft-cleaned via ``is_active = false``) never appear.
-
-    MD07-5 Phase 4: when ``report_type_id`` is supplied, dropdown values are
-    scoped to that report type so filters from different report types never
-    pollute each other.
+    MD-OPQ01: driven by the parser manifest for the selected report type.
+    Falls back to buyer/unit/metric/section for unregistered parser codes
+    (WF Test & Shade backwards compatibility).
+    dim_filters enables backend-driven cascading (e.g. sub_unit by unit).
     """
+    manifest = None
+    if report_type_id is not None:
+        rt_row = await session.execute(
+            select(ReportType.code).where(ReportType.id == report_type_id)
+        )
+        code = rt_row.scalar_one_or_none()
+        if code:
+            manifest = get_manifest(code)
+
+    ordered_keys = (
+        [d["key"] for d in sorted(manifest["dimensions"], key=lambda d: d["order"])]
+        if manifest else ["buyer", "unit", "metric", "section"]
+    )
+
     base_filters = [
         OperationalFact.deleted_at.is_(None),
         OperationalFact.is_active.is_(True),
         UploadedFile.deleted_at.is_(None),
-        # MD07-3: dropdowns surface only active, non-archived workbooks.
         UploadedFile.is_active_workbook.is_(True),
         UploadedFile.archived_at.is_(None),
         _uploaded_file_access_filter(user),
@@ -1204,31 +1329,55 @@ async def list_operational_dimensions(
     if report_type_id is not None:
         base_filters.append(UploadedFile.report_type_id == report_type_id)
 
-    async def _distinct(value_col: Any, label_col: Any) -> list[dict[str, Any]]:
+    async def _distinct(
+        value_col: Any,
+        label_col: Any,
+        extra: list[Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = [*base_filters, *(extra or []), value_col.is_not(None)]
         stmt = (
             select(value_col.label("value"), func.max(label_col).label("label"))
             .select_from(OperationalFact)
             .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
-            .where(*base_filters, value_col.is_not(None))
+            .where(*clauses)
             .group_by(value_col)
             .order_by(value_col)
         )
         result = await session.execute(stmt)
         return [
-            {"value": row.value, "label": row.label or row.value}
-            for row in result.all()
-            if row.value is not None and str(row.value).strip()
+            {"value": str(r.value), "label": str(r.label or r.value)}
+            for r in result.all()
+            if r.value is not None and str(r.value).strip()
         ]
 
-    buyers = await _distinct(OperationalFact.buyer, OperationalFact.buyer)
-    units = await _distinct(OperationalFact.unit, OperationalFact.unit)
-    metrics = await _distinct(OperationalFact.metric_key, OperationalFact.metric_label)
-    sections = await _distinct(
-        OperationalFact.operational_section,
-        OperationalFact.operational_section_label,
-    )
+    resolved = dim_filters or {}
+    dimensions: dict[str, list[dict[str, Any]]] = {}
 
-    # Distinct report dates (for date pickers / range hints).
+    for key in ordered_keys:
+        # Resolve cascade: does this dimension depend_on a parent that's selected?
+        dep_key = None
+        if manifest:
+            dep_key = next(
+                (d["depends_on"] for d in manifest["dimensions"]
+                 if d["key"] == key and d.get("depends_on")),
+                None,
+            )
+
+        cascade: list[Any] = []
+        if dep_key and dep_key in resolved:
+            parent_col = _DIMENSION_COLUMN_MAP.get(dep_key)
+            if parent_col is not None:
+                cascade.append(parent_col == resolved[dep_key])
+
+        if key in _DIMENSION_COLUMN_MAP:
+            dimensions[key] = await _distinct(
+                _DIMENSION_COLUMN_MAP[key],
+                _DIMENSION_LABEL_MAP.get(key, _DIMENSION_COLUMN_MAP[key]),
+                cascade,
+            )
+        # else: unknown key → skip (no JSONB fallback — keeps queries clean)
+
+    # Dates: always returned
     date_result = await session.execute(
         select(OperationalFact.report_date)
         .select_from(OperationalFact)
@@ -1238,17 +1387,11 @@ async def list_operational_dimensions(
         .order_by(OperationalFact.report_date.desc())
     )
     dates = [
-        {"value": row[0].isoformat(), "label": row[0].isoformat()}
-        for row in date_result.all()
+        {"value": r[0].isoformat(), "label": r[0].isoformat()}
+        for r in date_result.all()
     ]
 
-    return {
-        "buyers": buyers,
-        "units": units,
-        "metrics": metrics,
-        "sections": sections,
-        "dates": dates,
-    }
+    return {"dimensions": dimensions, "dates": dates}
 
 
 async def get_operational_facts_for_cells(

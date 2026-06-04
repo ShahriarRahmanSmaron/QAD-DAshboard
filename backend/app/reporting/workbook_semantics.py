@@ -41,6 +41,7 @@ from app.reporting.workbook_normalization import (
     is_composite_label,
     normalize_report_date,
     slugify,
+    is_pd_summary_workbook,
 )
 from app.reporting.workbook_ownership import (
     CellOwnership,
@@ -848,6 +849,12 @@ def extract_workbook_semantics(
     uploaded_file_id: UUID | None = None,
 ) -> SemanticExtraction:
     filename = str(workbook_metadata.get("filename") or "")
+    if is_pd_summary_workbook(workbook_metadata) or "pd summary" in filename.lower():
+        from app.reporting.parsers.pd_summary_parser import parse_pd_summary_workbook
+        return parse_pd_summary_workbook(
+            workbook_metadata=workbook_metadata,
+            uploaded_file_id=uploaded_file_id,
+        )
     raw_workbook_source = workbook_metadata.get("workbook_source")
     workbook_source: JsonObject = (
         raw_workbook_source if isinstance(raw_workbook_source, dict) else {}
@@ -942,6 +949,8 @@ def build_operational_fact_models(
                 uploaded_file_id=uploaded_file.id,
                 buyer=fact.buyer,
                 unit=fact.unit,
+                sub_unit=getattr(fact, "sub_unit", None),
+                department=getattr(fact, "department", None),
                 report_date=fact.report_date,
                 metric_key=fact.metric_key,
                 metric_label=fact.metric_label,
@@ -1035,8 +1044,12 @@ async def assign_workbook_report_type(
     re-pointed to the correct (possibly new) registry entry.
     """
     filename = str(workbook_metadata.get("filename") or uploaded_file.original_filename or "")
-    report_type_name = derive_report_type_name(filename)
-    report_type_code = derive_report_type_code(report_type_name)
+    if is_pd_summary_workbook(workbook_metadata) or "pd summary" in filename.lower():
+        report_type_name = "PD Summary"
+        report_type_code = "PD_SUMMARY"
+    else:
+        report_type_name = derive_report_type_name(filename)
+        report_type_code = derive_report_type_code(report_type_name)
     if not report_type_name or not report_type_code:
         # Nothing meaningful to classify (e.g. a date-only filename). Leave the
         # workbook unclassified rather than inventing a report type.

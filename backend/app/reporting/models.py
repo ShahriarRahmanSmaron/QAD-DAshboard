@@ -580,6 +580,8 @@ class OperationalFact(TimestampMixin, SoftDeleteMixin, AuditFieldsMixin, Base):
     )
     buyer: Mapped[str | None] = mapped_column(String(255))
     unit: Mapped[str | None] = mapped_column(String(255))
+    sub_unit: Mapped[str | None] = mapped_column(String(255))
+    department: Mapped[str | None] = mapped_column(String(255))
     report_date: Mapped[date | None] = mapped_column(Date)
     metric_key: Mapped[str] = mapped_column(String(128), nullable=False)
     metric_label: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -679,6 +681,9 @@ class OperationalFact(TimestampMixin, SoftDeleteMixin, AuditFieldsMixin, Base):
         Index("operational_facts_metric_key_idx", "metric_key"),
         Index("operational_facts_buyer_metric_date_idx", "buyer", "metric_key", "report_date"),
         Index("operational_facts_unit_metric_date_idx", "unit", "metric_key", "report_date"),
+        Index("operational_facts_sub_unit_date_idx", "sub_unit", "report_date"),
+        Index("operational_facts_department_date_idx", "department", "report_date"),
+        Index("operational_facts_unit_sub_unit_idx", "unit", "sub_unit"),
         # MD07-2B: classification + active-fact query indexes.
         Index("operational_facts_is_active_idx", "is_active"),
         Index("operational_facts_classification_idx", "row_classification"),

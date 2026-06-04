@@ -11,6 +11,8 @@ type Props = {
   currentDate: string | null;
   buyer?: string | null;
   unit?: string | null;
+  subUnit?: string | null;
+  department?: string | null;
   section?: string | null;
   reportTypeId?: string | null;
 };
@@ -44,6 +46,8 @@ export function OperationalComparisonPanel({
   currentDate,
   buyer,
   unit,
+  subUnit,
+  department,
   section,
   reportTypeId,
 }: Props) {
@@ -54,6 +58,8 @@ export function OperationalComparisonPanel({
           current_date: currentDate,
           buyer: buyer || undefined,
           unit: unit || undefined,
+          sub_unit: subUnit || undefined,
+          department: department || undefined,
           section: section || undefined,
           report_type_id: reportTypeId || undefined,
         }
@@ -66,6 +72,8 @@ export function OperationalComparisonPanel({
           metric,
           buyer: buyer || undefined,
           unit: unit || undefined,
+          sub_unit: subUnit || undefined,
+          department: department || undefined,
           section: section || undefined,
           report_type_id: reportTypeId || undefined,
           limit: 30,

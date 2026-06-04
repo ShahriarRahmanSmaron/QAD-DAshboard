@@ -341,6 +341,8 @@ class OperationalFactResponse(BaseModel):
     unit_id: UUID | None
     buyer: str | None
     unit: str | None
+    sub_unit: str | None = None
+    department: str | None = None
     report_date: date | None
     metric_key: str
     metric_label: str
@@ -492,10 +494,13 @@ class OperationalDimensionOption(BaseModel):
 
 
 class OperationalDimensionsResponse(BaseModel):
-    buyers: list[OperationalDimensionOption] = Field(default_factory=list)
-    units: list[OperationalDimensionOption] = Field(default_factory=list)
-    metrics: list[OperationalDimensionOption] = Field(default_factory=list)
-    sections: list[OperationalDimensionOption] = Field(default_factory=list)
+    """MD-OPQ01: Generic, manifest-driven dimension options.
+
+    ``dimensions`` is keyed by dimension key (e.g. "buyer", "sub_unit").
+    Consumers iterate the manifest's dimension list and look up options here.
+    ``dates`` is always returned — used by date pickers regardless of type.
+    """
+    dimensions: dict[str, list[OperationalDimensionOption]] = Field(default_factory=dict)
     dates: list[OperationalDimensionOption] = Field(default_factory=list)
 
 
@@ -784,13 +789,9 @@ class ReportTypeListResponse(BaseModel):
 
 
 class ReportTypeOptionWithCounts(BaseModel):
-    """Report type option with its active-workbook count (MD07-5 Phase 5).
-
-    The dynamic report-type registry only emits report types backed by at least
-    one active, non-archived workbook, and reports how many active workbooks
-    contribute to each so the UI can surface the count.
+    """MD-OPQ01: includes the full ParserManifest so the frontend needs
+    no local registry. manifest=None means unregistered parser code.
     """
-
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -800,6 +801,8 @@ class ReportTypeOptionWithCounts(BaseModel):
     version: int
     is_active: bool
     active_workbooks: int
+    # MD-OPQ01: full manifest from parser_registry.py — no DB column
+    manifest: dict[str, Any] | None = None
 
 
 class ReportTypeListFlatResponse(BaseModel):

@@ -20,6 +20,7 @@ from app.reporting.schemas import (
 from app.reporting.workbook_normalization import (
     derive_report_type_code,
     derive_report_type_name,
+    is_pd_summary_workbook,
 )
 from app.reporting.workbook_parser import parse_xlsx_workbook
 from app.reporting.workbook_semantics import (
@@ -119,8 +120,12 @@ async def save_and_parse_workbook_upload(
     # against the dynamic registry up-front so the duplicate identity matches the
     # classification the workbook will be stored with.
     report_date = extract_workbook_report_date(workbook_metadata)
-    report_type_name = derive_report_type_name(safe_filename)
-    report_type_code = derive_report_type_code(report_type_name)
+    if is_pd_summary_workbook(workbook_metadata) or "pd summary" in safe_filename.lower():
+        report_type_name = "PD Summary"
+        report_type_code = "PD_SUMMARY"
+    else:
+        report_type_name = derive_report_type_name(safe_filename)
+        report_type_code = derive_report_type_code(report_type_name)
     duplicate_report_type_id: UUID | None = None
     if report_type_code:
         existing_report_type = await repository.find_report_type_by_code(

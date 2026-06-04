@@ -28,11 +28,15 @@ import {
 
 const OPERATIONAL_STALE_TIME = 30_000;
 
-export function useOperationalDimensions(reportTypeId?: string) {
+export function useOperationalDimensions(
+  reportTypeId?: string,
+  dimFilters?: Record<string, string>,
+) {
   return useQuery({
-    queryKey: ["operations", "dimensions", reportTypeId ?? null],
-    queryFn: () => getOperationalDimensions(reportTypeId),
+    queryKey: ["operations", "dimensions", reportTypeId ?? null, dimFilters ?? null],
+    queryFn: () => getOperationalDimensions(reportTypeId, dimFilters),
     staleTime: 300_000,
+    enabled: Boolean(reportTypeId),   // no fetch until report type chosen
   });
 }
 
