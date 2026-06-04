@@ -30,12 +30,15 @@ import {
   CheckCircle2,
   Clock,
   Database,
+  Download,
   Eye,
   Factory,
   FileSpreadsheet,
   Layers,
   Lock,
+  MessageCircle,
   Minus,
+  Sparkles,
   ShieldCheck,
   TrendingDown,
   TrendingUp,
@@ -107,6 +110,23 @@ type TrendPoint = {
   wait_for_test: number;
 };
 
+type ReportTypeSummary = {
+  report_type_id: string;
+  report_type_name: string;
+  report_type_code: string;
+  latest_report_date: string | null;
+  kpis: Array<Pick<KpiSnapshot, "metric_key" | "label" | "value">>;
+  preview_metric_key: string | null;
+  preview_metric_label: string | null;
+  preview_chart: Array<{ unit: string; value: number }>;
+};
+
+type WfTestPreviewPoint = {
+  unit: string;
+  value: number;
+  date: string;
+};
+
 type LandingSnapshot = {
   hero: HeroStats;
   workbook: WorkbookSummary | null;
@@ -119,6 +139,8 @@ type LandingSnapshot = {
     buyer_comparison: ComparisonRow[];
   };
   trends: TrendPoint[];
+  report_types?: ReportTypeSummary[];
+  wf_test_preview_chart?: WfTestPreviewPoint[];
 };
 
 // ---------------------------------------------------------------------------
@@ -356,12 +378,6 @@ export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const workbook = snapshot?.workbook;
-  const kpis = snapshot?.kpis ?? [];
-  const insights = snapshot?.insights ?? [];
-  const trends = snapshot?.trends ?? [];
-  const previewCharts = snapshot?.preview_charts;
-
   function openLogin() {
     if (isAuthenticated) {
       router.push("/dashboard");
@@ -370,370 +386,308 @@ export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
     }
   }
 
-  // Unit movements
-  const unitIncrease = insights.find(i => i.type === 'largest_unit_increase') || insights.find(i => i.type.includes('increase'));
-  const unitReduction = insights.find(i => i.type === 'largest_unit_reduction') || insights.find(i => i.type.includes('reduction'));
-
   return (
-    <div className="min-h-screen bg-[#f4f3ee] text-[#1c1917] font-sans selection:bg-[#c15f3c]/30 selection:text-[#1c1917] dark:bg-[#1c1917] dark:text-[#f4f3ee] transition-colors duration-300">
-      {/* ====== HERO ====== */}
-      <section className="relative overflow-hidden px-4 pb-16 pt-24 sm:px-8 sm:pt-32">
-        <div className="mx-auto max-w-4xl text-center flex flex-col items-center">
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-            className="flex flex-col items-center"
-          >
-            <h1 className="text-5xl font-extrabold tracking-tight text-[#1c1917] dark:text-white sm:text-6xl md:text-7xl">
-              DBL QAD Portal
-            </h1>
-            <p className="mt-6 text-xl md:text-2xl text-[#c15f3c] font-semibold tracking-wide max-w-2xl leading-relaxed">
-              Operational intelligence for textile manufacturing.
-            </p>
-            <div className="mt-4 flex flex-col items-center text-sm text-[#78716c] dark:text-[#a8a29e] space-y-1.5 font-light">
-              <p>Built from live production reports.</p>
-              <p>Updated automatically from uploaded workbooks.</p>
-            </div>
-
-            {workbook && (
-              <div className="mt-10 border border-[#b1ada1]/40 bg-white dark:bg-[#292524] px-6 py-4 rounded-lg flex flex-col items-center shadow-sm">
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e]">Latest Report</span>
-                <span className="mt-1 text-base font-bold text-[#1c1917] dark:text-[#f4f3ee]">{workbook.report_type_name ?? workbook.filename}</span>
-                <span className="mt-0.5 text-xs text-[#78716c] dark:text-[#a8a29e]">{formatShortDate(workbook.report_date)}</span>
-              </div>
-            )}
-
-            <div className="mt-10">
-              <button
-                onClick={openLogin}
-                className="rounded-lg bg-[#c15f3c] px-8 py-3 text-sm font-semibold text-white transition hover:bg-[#c15f3c]/90 active:scale-95 cursor-pointer shadow-sm"
-              >
-                {isAuthenticated ? "Explore Analytics" : "Sign In"}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      </section>
-
-      {/* ====== OPERATIONAL SNAPSHOT ====== */}
-      {kpis.length > 0 && (
-        <section className="px-4 py-16 sm:px-8 border-t border-[#b1ada1]/40 bg-[#f4f3ee] dark:bg-[#1c1917]">
-          <div className="mx-auto max-w-5xl">
-            <h2 className="text-xs font-semibold uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] mb-8 text-center sm:text-left">
-              Operational Snapshot
-            </h2>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-              {kpis.map((kpi) => (
-                <div key={kpi.metric_key} className="border border-[#b1ada1]/40 bg-white dark:bg-[#292524] p-8 rounded-lg shadow-sm">
-                  <span className="text-xs uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] font-medium block min-h-[32px]">
-                    {kpi.label}
-                  </span>
-                  <p className="mt-4 text-4xl font-light tracking-tight text-[#1c1917] dark:text-[#f4f3ee] tabular-nums">
-                    {kpi.value.toLocaleString()}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ====== LATEST REPORT HIGHLIGHT ====== */}
-      {workbook && (
-        <section className="px-4 py-16 sm:px-8 border-y border-[#b1ada1]/40 bg-white dark:bg-[#292524]">
-          <div className="mx-auto max-w-5xl flex flex-col md:flex-row md:items-center md:justify-between gap-8">
-            <div>
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e]">Latest Report</span>
-              <h3 className="mt-1 text-3xl font-bold tracking-tight text-[#1c1917] dark:text-white">
-                {workbook.report_type_name ?? workbook.filename}
-              </h3>
-            </div>
-            <div className="flex gap-12">
-              <div>
-                <span className="text-[10px] uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block">Report Date</span>
-                <span className="mt-1 text-lg font-bold text-[#1c1917]/80 dark:text-[#f4f3ee]/80 tabular-nums">
-                  {formatShortDate(workbook.report_date)}
-                </span>
-              </div>
-              {snapshot?.previous_date && (
-                <div>
-                  <span className="text-[10px] uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block">Compared Against</span>
-                  <span className="mt-1 text-lg font-bold text-[#78716c] dark:text-[#a8a29e] tabular-nums">
-                    {formatShortDate(snapshot.previous_date)}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ====== OPERATIONAL MOVEMENT ====== */}
-      <section className="px-4 py-16 sm:px-8 bg-[#f4f3ee] dark:bg-[#1c1917]">
-        <div className="mx-auto max-w-5xl">
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] mb-8">
-            Operational Movement
-          </h2>
-          <div className="grid md:grid-cols-2 gap-8">
-            {/* Largest Increase Panel */}
-            <div className="border border-[#b1ada1]/40 bg-white dark:bg-[#292524] p-8 rounded-lg flex flex-col justify-between min-h-48 shadow-sm">
-              <div>
-                <span className="text-xs uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] font-medium">Largest Increase</span>
-                <h4 className="mt-4 text-2xl font-bold text-[#1c1917] dark:text-white">
-                  {unitIncrease ? unitIncrease.entity : "CCL-B"}
-                </h4>
-              </div>
-              <p className="mt-6 text-4xl font-light text-[#c15f3c] tabular-nums">
-                {unitIncrease ? `${unitIncrease.difference > 0 ? "+" : ""}${unitIncrease.difference.toLocaleString()} kg` : "+5,311 kg"}
-              </p>
-            </div>
-
-            {/* Largest Reduction Panel */}
-            <div className="border border-[#b1ada1]/40 bg-white dark:bg-[#292524] p-8 rounded-lg flex flex-col justify-between min-h-48 shadow-sm">
-              <div>
-                <span className="text-xs uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] font-medium">Largest Reduction</span>
-                <h4 className="mt-4 text-2xl font-bold text-[#1c1917] dark:text-white">
-                  {unitReduction ? unitReduction.entity : "CCL-07"}
-                </h4>
-              </div>
-              <p className="mt-6 text-4xl font-light text-emerald-600 dark:text-emerald-400 tabular-nums">
-                {unitReduction ? `${unitReduction.difference.toLocaleString()} kg` : "-10,231 kg"}
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ====== FACTORY TREND ====== */}
-      {trends.length > 0 && (
-        <section className="px-4 py-16 sm:px-8 border-y border-[#b1ada1]/40 bg-white dark:bg-[#292524]">
-          <div className="mx-auto max-w-5xl">
-            <div className="mb-8">
-              <span className="text-xs font-semibold uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block mb-1">Visual Centerpiece</span>
-              <h2 className="text-2xl font-bold tracking-tight text-[#1c1917] dark:text-white">
-                Factory Operational Trend (Wait For Test)
-              </h2>
-            </div>
-            <div className="w-full bg-[#f4f3ee] dark:bg-[#1c1917] border border-[#b1ada1]/40 p-6 rounded-lg">
-              <ResponsiveContainer width="100%" height={320}>
-                <LineChart data={trends} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(177, 173, 161, 0.2)" vertical={false} />
-                  <XAxis
-                    dataKey="date"
-                    tickFormatter={(dateStr) => {
-                      try {
-                        const d = new Date(dateStr);
-                        return d.toLocaleDateString("en-US", { day: "2-digit", month: "short" });
-                      } catch {
-                        return dateStr;
-                      }
-                    }}
-                    stroke="rgba(177, 173, 161, 0.4)"
-                    tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-                    tickLine={false}
-                    axisLine={{ stroke: "rgba(177, 173, 161, 0.3)" }}
-                  />
-                  <YAxis
-                    stroke="rgba(177, 173, 161, 0.4)"
-                    tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(v: number) =>
-                      v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)
-                    }
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      background: "var(--card)",
-                      border: "1px solid var(--border)",
-                      borderRadius: "0.5rem",
-                      color: "var(--foreground)",
-                      fontSize: 12,
-                    }}
-                    labelFormatter={(label) => {
-                      try {
-                        const d = new Date(label);
-                        return d.toLocaleDateString("en-US", { day: "2-digit", month: "short", year: "numeric" });
-                      } catch {
-                        return label;
-                      }
-                    }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="wait_for_test"
-                    name="Wait For Test"
-                    stroke="#c15f3c"
-                    strokeWidth={2.5}
-                    dot={{ r: 3, fill: "#c15f3c", strokeWidth: 0 }}
-                    activeDot={{ r: 5, strokeWidth: 2, fill: "#c15f3c" }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ====== LATEST REPORT DETAILS ====== */}
-      {workbook && (
-        <section className="px-4 py-16 sm:px-8 bg-[#f4f3ee] dark:bg-[#1c1917]">
-          <div className="mx-auto max-w-5xl">
-            <div className="border border-[#b1ada1]/40 bg-white dark:bg-[#292524] p-8 rounded-lg shadow-sm">
-              <span className="text-xs uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block mb-6 font-medium">Latest Report Details</span>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-                <div>
-                  <span className="text-xs uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block">Report Type</span>
-                  <p className="mt-1 text-lg font-semibold text-[#1c1917] dark:text-[#f4f3ee]">
-                    {workbook.report_type_name ?? "WF Test & Shade"}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-xs uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block">Report Date</span>
-                  <p className="mt-1 text-lg font-semibold text-[#1c1917] dark:text-[#f4f3ee] tabular-nums">
-                    {formatShortDate(workbook.report_date)}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-xs uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block">Units Reporting</span>
-                  <p className="mt-1 text-lg font-semibold text-[#1c1917] dark:text-[#f4f3ee] tabular-nums">
-                    {workbook.unit_count}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-xs uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block">Buyers Reporting</span>
-                  <p className="mt-1 text-lg font-semibold text-[#1c1917] dark:text-[#f4f3ee] tabular-nums">
-                    {workbook.buyer_count}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-8 pt-6 border-t border-[#b1ada1]/30 flex items-center justify-between">
-                <span className="text-xs text-[#78716c] dark:text-[#a8a29e]">Uploaded {relativeTime(workbook.uploaded_at)}</span>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ====== PREVIEW CHARTS ====== */}
-      {previewCharts && (previewCharts.unit_comparison?.length > 0 || previewCharts.buyer_comparison?.length > 0) && (
-        <section className="px-4 py-16 sm:px-8 bg-[#f4f3ee] dark:bg-[#1c1917] border-t border-[#b1ada1]/40">
-          <div className="mx-auto max-w-5xl">
-            <div className="mb-8 text-center sm:text-left">
-              <span className="text-xs font-semibold uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block mb-1">Data Preview</span>
-              <h2 className="text-2xl font-bold tracking-tight text-[#1c1917] dark:text-white">
-                Unit & Buyer Comparisons
-              </h2>
-            </div>
-            
-            <div className="grid md:grid-cols-2 gap-8">
-              {/* Unit Comparison */}
-              {previewCharts.unit_comparison?.length > 0 && (
-                <div className="border border-[#b1ada1]/40 bg-white dark:bg-[#292524] p-6 rounded-lg shadow-sm">
-                  <h3 className="text-sm font-semibold uppercase tracking-wider text-[#78716c] dark:text-[#a8a29e] mb-6">
-                    Top 5 Units (Current vs Previous)
-                  </h3>
-                  <div className="h-64 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={previewCharts.unit_comparison} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(177, 173, 161, 0.2)" vertical={false} />
-                        <XAxis dataKey="label" stroke="rgba(177, 173, 161, 0.4)" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} />
-                        <YAxis stroke="rgba(177, 173, 161, 0.4)" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : String(v)} />
-                        <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "0.5rem", color: "var(--foreground)", fontSize: 12 }} />
-                        <Bar dataKey="current_value" name="Current" fill="#c15f3c" radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="previous_value" name="Previous" fill="rgba(177, 173, 161, 0.6)" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
-
-              {/* Buyer Comparison */}
-              {previewCharts.buyer_comparison?.length > 0 && (
-                <div className="border border-[#b1ada1]/40 bg-white dark:bg-[#292524] p-6 rounded-lg shadow-sm">
-                  <h3 className="text-sm font-semibold uppercase tracking-wider text-[#78716c] dark:text-[#a8a29e] mb-6">
-                    Top 5 Buyers (Current vs Previous)
-                  </h3>
-                  <div className="h-64 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={previewCharts.buyer_comparison} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(177, 173, 161, 0.2)" vertical={false} />
-                        <XAxis dataKey="label" stroke="rgba(177, 173, 161, 0.4)" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} />
-                        <YAxis stroke="rgba(177, 173, 161, 0.4)" tick={{ fill: "var(--muted-foreground)", fontSize: 11 }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : String(v)} />
-                        <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "0.5rem", color: "var(--foreground)", fontSize: 12 }} />
-                        <Bar dataKey="current_value" name="Current" fill="#c15f3c" radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="previous_value" name="Previous" fill="rgba(177, 173, 161, 0.6)" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ====== ANALYTICS PREVIEW ====== */}
-      <section className="px-4 py-16 sm:px-8 border-t border-[#b1ada1]/40 bg-white dark:bg-[#292524]">
-        <div className="mx-auto max-w-5xl">
-          <span className="text-xs font-semibold uppercase tracking-widest text-[#78716c] dark:text-[#a8a29e] block mb-8 text-center">
-            Analytics Preview
-          </span>
-          <div className="relative overflow-hidden border border-[#b1ada1]/40 rounded-xl cursor-pointer group" onClick={openLogin}>
-            <div className="relative h-96 w-full filter blur-[5px] brightness-50 transition duration-500 group-hover:blur-[3px] group-hover:brightness-75 group-hover:scale-[1.005]">
-              <img
-                src="/dashboard_preview.png"
-                alt="Dashboard preview"
-                className="w-full h-full object-cover object-top"
-              />
-            </div>
-            <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center text-center p-6 transition duration-300 group-hover:bg-black/50">
-              <div className="flex flex-col items-center gap-3">
-                <div className="rounded-full bg-white/10 p-3 text-white backdrop-blur-md">
-                  <Lock className="size-6 text-[#c15f3c]" />
-                </div>
-                <h3 className="mt-3 text-2xl font-bold text-white">Sign in to explore analytics</h3>
-                <p className="text-sm text-white/50 max-w-sm mt-1">
-                  Access Unit Explorer, Buyer Explorer, Trend Analysis, and exportable reports.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ====== FINAL CTA ====== */}
-      <section className="px-4 py-24 sm:px-8 border-t border-[#b1ada1]/40 bg-[#f4f3ee] dark:bg-[#1c1917]">
-        <div className="mx-auto max-w-2xl text-center flex flex-col items-center">
-          <h2 className="text-3xl font-extrabold tracking-tight text-[#1c1917] dark:text-white sm:text-4xl">
-            Explore Operational Analytics
-          </h2>
-          <p className="mt-4 text-base text-[#78716c] dark:text-[#a8a29e] leading-relaxed max-w-lg">
-            Sign in to access historical trends, buyer analysis, unit drilldowns and exports.
+    <div className="min-h-screen bg-background text-foreground font-sans selection:bg-primary/30 selection:text-foreground transition-colors duration-300">
+      {/* ====== SECTION 1 — HERO ====== */}
+      <section className="relative flex flex-col justify-center min-h-[70vh] px-6 py-16 max-w-5xl mx-auto">
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
+          className="text-center flex flex-col items-center justify-center space-y-8"
+        >
+          <h1 className="text-5xl font-extrabold tracking-tight sm:text-6xl md:text-7xl">
+            DBL QAD Portal
+          </h1>
+          <p className="text-xl md:text-2xl text-primary font-semibold tracking-wide max-w-2xl leading-relaxed">
+            Operational intelligence for textile manufacturing.
           </p>
-          <div className="mt-8">
+          <div className="flex flex-col items-center text-base text-foreground dark:text-neutral-200 space-y-1 font-semibold">
+            <p>Built from live production reports.</p>
+            <p>Updated automatically from uploaded workbooks.</p>
+          </div>
+
+          <div className="pt-4">
             <button
               onClick={openLogin}
-              className="rounded-lg bg-[#c15f3c] px-8 py-3 text-sm font-semibold text-white transition hover:bg-[#c15f3c]/90 active:scale-95 cursor-pointer shadow-sm"
+              className="rounded-lg bg-primary px-8 py-3 text-sm font-semibold text-white transition hover:bg-primary/90 active:scale-95 cursor-pointer shadow-sm"
             >
-              {isAuthenticated ? "Go to Dashboard" : "Sign In"}
+              {isAuthenticated ? "Explore Analytics" : "Sign In"}
             </button>
           </div>
+        </motion.div>
+      </section>
+
+      {/* ====== SECTION 2 — REPORT SUMMARIES ====== */}
+      <section className="py-20 px-6 max-w-5xl mx-auto border-t border-border">
+        <div className="mb-10">
+          <p className="text-xs uppercase tracking-widest text-muted-foreground font-bold">
+            Latest Report Summaries
+          </p>
+          <h2 className="mt-1 text-2xl font-bold tracking-tight text-foreground">
+            Current operational snapshot by report type
+          </h2>
         </div>
+        <div className="space-y-10">
+          {snapshot?.report_types?.map((reportType) => (
+            <div key={reportType.report_type_id} className="grid gap-6 lg:grid-cols-[220px_1fr] lg:items-stretch">
+              <div className="flex flex-col justify-center rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] p-6">
+                <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="size-5" />
+                  <span className="text-xs font-bold uppercase tracking-widest">Latest report</span>
+                </div>
+                <h3 className="mt-4 text-xl font-bold text-foreground">{reportType.report_type_name}</h3>
+                <p className="mt-2 text-sm font-medium tabular-nums text-muted-foreground">
+                  {formatShortDate(reportType.latest_report_date)}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                {reportType.kpis.map((kpi) => (
+                  <div key={kpi.metric_key} className="rounded-lg border border-border bg-card p-6 shadow-sm">
+                    <span className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
+                      {kpi.label}
+                    </span>
+                    <p className="mt-4 text-3xl font-normal tracking-tight text-foreground tabular-nums">
+                      {kpi.value.toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ====== SECTION 3 — KEY OPERATIONAL MOVEMENTS ====== */}
+      <section className="py-20 px-6 max-w-5xl mx-auto border-t border-border">
+        <div className="mb-8">
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            Key Operational Movements
+          </p>
+          <h2 className="mt-1 text-2xl font-bold tracking-tight text-foreground">
+            Latest report previews
+          </h2>
+        </div>
+        <div className="space-y-8">
+          {snapshot?.report_types?.map((reportType) => (
+            <button
+              key={reportType.report_type_id}
+              type="button"
+              onClick={openLogin}
+              className="group grid w-full gap-6 rounded-xl border border-border bg-card p-6 text-left shadow-sm transition hover:border-primary/40 hover:shadow-md lg:grid-cols-[220px_1fr] lg:p-8"
+            >
+              <div className="flex flex-col justify-center">
+                <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                  Report Type
+                </span>
+                <h3 className="mt-3 text-2xl font-bold text-foreground">
+                  {reportType.report_type_name}
+                </h3>
+                <p className="mt-3 text-sm font-medium tabular-nums text-muted-foreground">
+                  {formatShortDate(reportType.latest_report_date)}
+                </p>
+                <span className="mt-5 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-primary">
+                  Open full analytics
+                  <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+                </span>
+              </div>
+              <div className="min-h-[280px] rounded-lg border border-border/70 bg-background/40 p-4">
+                <div className="mb-3">
+                  <h4 className="text-sm font-semibold text-foreground">
+                    {reportType.preview_metric_label ?? "Metric"} by Unit
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    Latest report date: {formatShortDate(reportType.latest_report_date)}
+                  </p>
+                </div>
+                {reportType.preview_chart.length > 0 ? (
+                  <div className="h-[220px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={reportType.preview_chart}
+                        layout="vertical"
+                        margin={{ top: 0, right: 24, left: 4, bottom: 0 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border)" />
+                        <XAxis
+                          type="number"
+                          tick={{ fill: "var(--muted-foreground)", fontSize: 10 }}
+                          tickLine={false}
+                          axisLine={false}
+                          tickFormatter={(value: number) => value.toLocaleString()}
+                        />
+                        <YAxis
+                          dataKey="unit"
+                          type="category"
+                          tick={{ fill: "var(--muted-foreground)", fontSize: 10 }}
+                          tickLine={false}
+                          axisLine={false}
+                          width={70}
+                        />
+                        <Bar
+                          dataKey="value"
+                          name={reportType.preview_metric_label ?? "Value"}
+                          fill="#c15f3c"
+                          radius={[0, 4, 4, 0]}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+                    No unit chart data available
+                  </div>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* ====== SECTION 5 — ANALYTICS PREVIEW ====== */}
+      <section className="py-20 px-6 max-w-5xl mx-auto border-t border-border">
+        <div className="mb-10 text-center">
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            From report to action
+          </p>
+          <h3 className="mt-2 text-3xl font-bold tracking-tight text-foreground">
+            One workspace for operational reporting
+          </h3>
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground">
+            Upload production data, turn it into clear decisions, and share the results without slowing down.
+          </p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            { icon: FileSpreadsheet, title: "Refresh with Excel", description: "Upload the latest workbook and keep every dashboard current." },
+            { icon: Sparkles, title: "Ask QAD AI", description: "Turn report data into quick analysis and useful visuals." },
+            { icon: Download, title: "Presentation-ready", description: "Export clear charts for meetings, reviews, and updates." },
+            { icon: MessageCircle, title: "Instant alerts", description: "Notify the team on Telegram when a new report goes live." },
+          ].map((feature) => {
+            const Icon = feature.icon;
+            return (
+              <div key={feature.title} className="rounded-xl border border-border bg-card p-6 shadow-sm">
+                <div className="flex size-11 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
+                  <Icon className="size-5" />
+                </div>
+                <h4 className="mt-5 text-base font-bold text-foreground">{feature.title}</h4>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{feature.description}</p>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-10 text-center">
+          <button
+            type="button"
+            onClick={openLogin}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-7 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 active:scale-95"
+          >
+            {isAuthenticated ? "Open QAD Portal" : "Sign in to QAD Portal"}
+            <ArrowRight className="size-4" />
+          </button>
+          <p className="mt-3 text-xs text-muted-foreground">Secure access for your operational team.</p>
+        </div>
+        {false && <div
+          onClick={openLogin}
+          className="relative overflow-hidden border border-border rounded-xl cursor-pointer group shadow-lg bg-card"
+        >
+          {/* Live Preview Chart (Blurred) */}
+          <div className="relative p-8 h-[400px] w-full flex flex-col justify-between filter blur-[4px] brightness-[0.5] transition duration-500 group-hover:blur-[2px] group-hover:brightness-[0.6] group-hover:scale-[1.005]">
+            {(snapshot?.wf_test_preview_chart?.length ?? 0) > 0 ? (
+              <div className="w-full h-full flex flex-col justify-between">
+                <div className="mb-2 text-left">
+                  <h4 className="text-lg font-bold text-foreground">T/Stock — by Unit</h4>
+                  <p className="text-xs text-muted-foreground">
+                    Report Date: {formatShortDate(snapshot?.wf_test_preview_chart?.[0]?.date ?? null)}
+                  </p>
+                </div>
+                <div className="flex-1 min-h-0">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={snapshot?.wf_test_preview_chart}
+                      layout="vertical"
+                      margin={{ top: 10, right: 30, left: 10, bottom: 10 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="rgba(255,255,255,0.08)" />
+                      <XAxis
+                        type="number"
+                        stroke="rgba(255,255,255,0.4)"
+                        tick={{ fill: "rgba(255,255,255,0.6)", fontSize: 11 }}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(v: number) => v.toLocaleString()}
+                      />
+                      <YAxis
+                        dataKey="unit"
+                        type="category"
+                        stroke="rgba(255,255,255,0.4)"
+                        tick={{ fill: "rgba(255,255,255,0.6)", fontSize: 11 }}
+                        tickLine={false}
+                        axisLine={false}
+                        width={85}
+                      />
+                      <Bar dataKey="value" name="T/Stock" fill="#c15f3c" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center w-full h-full text-muted-foreground text-sm">
+                No preview data available
+              </div>
+            )}
+          </div>
+
+          {/* Centered Glassmorphism Overlay */}
+          <div className="absolute inset-0 flex items-center justify-center p-6 bg-black/50 transition duration-300 group-hover:bg-black/40">
+            <div className="max-w-md w-full bg-[#1c1917]/85 dark:bg-[#1c1917]/90 backdrop-blur-md border border-white/[0.08] p-8 rounded-2xl text-center shadow-2xl flex flex-col items-center">
+              <div className="rounded-full bg-primary/10 border border-primary/20 p-3 text-primary mb-4">
+                <Lock className="size-6" />
+              </div>
+              <h4 className="text-2xl font-bold text-white tracking-tight">
+                Full operational analysis available
+              </h4>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Showing live T/Stock by Unit for WF Test & Shade report type.
+              </p>
+              <ul className="mt-6 space-y-2.5 text-sm text-[#a8a29e] text-center font-medium w-full">
+                <li className="flex items-center justify-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                  Unit performance matrix
+                </li>
+                <li className="flex items-center justify-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                  Buyer trends & historical load
+                </li>
+                <li className="flex items-center justify-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                  Detailed metric timelines
+                </li>
+                <li className="flex items-center justify-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                  Exportable workbook dashboards
+                </li>
+              </ul>
+              <span className="mt-8 text-xs font-semibold uppercase tracking-widest text-primary group-hover:underline">
+                Click graph to unlock portal
+              </span>
+            </div>
+          </div>
+        </div>}
       </section>
 
       {/* ====== FOOTER ====== */}
-      <footer className="py-8 text-center text-xs text-[#78716c] dark:text-[#a8a29e] border-t border-[#b1ada1]/20 bg-[#f4f3ee] dark:bg-[#1c1917]">
+      <footer className="py-8 text-center text-xs text-muted-foreground border-t border-border/20 bg-background">
         <p>Developed by Shahriar Rahman Smaron</p>
       </footer>
 
       {/* ====== Loading overlay ====== */}
       {loading && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#f4f3ee] dark:bg-[#1c1917]">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-background">
           <div className="flex flex-col items-center gap-3">
-            <div className="size-8 animate-spin rounded-full border-2 border-[#b1ada1]/20 border-t-[#c15f3c]" />
-            <p className="text-sm text-[#78716c] dark:text-[#a8a29e]">Loading snapshot…</p>
+            <div className="size-8 animate-spin rounded-full border-2 border-border border-t-primary" />
+            <p className="text-sm text-muted-foreground">Loading snapshot…</p>
           </div>
         </div>
       )}

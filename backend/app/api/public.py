@@ -17,11 +17,11 @@ from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db_session
-from app.reporting.models import OperationalFact, ReportType, UploadedFile
+from app.reporting.models import OperationalFact, ReportType, UploadedFile, Unit
 
 router = APIRouter(prefix="/public", tags=["public"])
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
@@ -45,6 +45,26 @@ def _active_fact_base_filters() -> list:
     ]
 
 
+async def _get_active_unit_prefixes(session: AsyncSession) -> list[str]:
+    """Retrieve active unit prefixes from the database."""
+    units_stmt = select(Unit.code).where(Unit.deleted_at.is_(None), Unit.is_active.is_(True))
+    units_res = await session.execute(units_stmt)
+    active_codes = [r[0] for r in units_res.all()]
+    prefixes = set()
+    for code in active_codes:
+        prefix = code.split('-')[0].strip()
+        if prefix:
+            prefixes.add(prefix)
+    return list(prefixes)
+
+
+def _unit_prefix_filter(prefixes: list[str]) -> Any:
+    """Return SQL filter for unit prefixes."""
+    if not prefixes:
+        return True
+    return or_(*(OperationalFact.unit.like(f"{p}%") for p in prefixes))
+
+
 def _safe_float(value: Any) -> float:
     if value is None:
         return 0.0
@@ -60,12 +80,15 @@ def _safe_float(value: Any) -> float:
 
 async def _latest_workbook_summary(session: AsyncSession) -> dict[str, Any] | None:
     """Return metadata about the most-recently uploaded active workbook."""
+    prefixes = await _get_active_unit_prefixes(session)
     fact_count_sq = (
         select(func.count(OperationalFact.id))
         .where(
             OperationalFact.uploaded_file_id == UploadedFile.id,
             OperationalFact.deleted_at.is_(None),
             OperationalFact.is_active.is_(True),
+            OperationalFact.row_classification == _DETAIL_CLASSIFICATION,
+            _unit_prefix_filter(prefixes),
         )
         .correlate(UploadedFile)
         .scalar_subquery()
@@ -115,6 +138,8 @@ async def _latest_workbook_summary(session: AsyncSession) -> dict[str, Any] | No
             OperationalFact.uploaded_file_id == mapping["workbook_id"],
             OperationalFact.deleted_at.is_(None),
             OperationalFact.is_active.is_(True),
+            OperationalFact.row_classification == _DETAIL_CLASSIFICATION,
+            _unit_prefix_filter(prefixes),
         )
     )
     count_row = counts.one()._mapping
@@ -126,7 +151,8 @@ async def _latest_workbook_summary(session: AsyncSession) -> dict[str, Any] | No
 
 async def _hero_stats(session: AsyncSession) -> dict[str, Any]:
     """Return aggregate counts for the hero section animated counters."""
-    base = _active_fact_base_filters()
+    prefixes = await _get_active_unit_prefixes(session)
+    base = [*_active_fact_base_filters(), _unit_prefix_filter(prefixes)]
 
     result = await session.execute(
         select(
@@ -404,6 +430,188 @@ async def _historical_trends(session: AsyncSession, trend_dates: list[date]) -> 
     return points
 
 
+async def _get_active_report_types_summaries(session: AsyncSession) -> list[dict[str, Any]]:
+    """Return each report type's KPI snapshot for its latest report date."""
+    base = _active_fact_base_filters()
+    result = await session.execute(
+        select(
+            ReportType.id,
+            ReportType.name,
+            ReportType.code,
+            func.max(OperationalFact.report_date).label("latest_report_date"),
+        )
+        .select_from(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .join(ReportType, ReportType.id == UploadedFile.report_type_id)
+        .where(
+            *base,
+            ReportType.deleted_at.is_(None),
+            ReportType.is_active.is_(True),
+            OperationalFact.report_date.is_not(None),
+        )
+        .group_by(ReportType.id, ReportType.name, ReportType.code)
+        .order_by(func.max(OperationalFact.report_date).desc(), ReportType.name)
+    )
+
+    summaries: list[dict[str, Any]] = []
+    for row in result.all():
+        kpi_result = await session.execute(
+            select(
+                OperationalFact.metric_key,
+                func.max(OperationalFact.metric_label).label("label"),
+                func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("value"),
+            )
+            .select_from(OperationalFact)
+            .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+            .where(
+                *base,
+                UploadedFile.report_type_id == row.id,
+                OperationalFact.report_date == row.latest_report_date,
+                OperationalFact.metric_key.in_(_LANDING_KPI_METRICS),
+            )
+            .group_by(OperationalFact.metric_key)
+        )
+        kpis_by_key = {
+            item.metric_key: {
+                "metric_key": item.metric_key,
+                "label": item.label or item.metric_key,
+                "value": round(_safe_float(item.value)),
+            }
+            for item in kpi_result.all()
+        }
+
+        preview_metric_result = await session.execute(
+            select(
+                OperationalFact.metric_key,
+                func.max(OperationalFact.metric_label).label("label"),
+            )
+            .select_from(OperationalFact)
+            .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+            .where(
+                *base,
+                UploadedFile.report_type_id == row.id,
+                OperationalFact.report_date == row.latest_report_date,
+                OperationalFact.unit.is_not(None),
+            )
+            .group_by(OperationalFact.metric_key)
+            .order_by(
+                (OperationalFact.metric_key == "t_stock").desc(),
+                OperationalFact.metric_key,
+            )
+            .limit(1)
+        )
+        preview_metric = preview_metric_result.one_or_none()
+        preview_chart: list[dict[str, Any]] = []
+        if preview_metric is not None:
+            preview_result = await session.execute(
+                select(
+                    OperationalFact.unit.label("unit"),
+                    func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("value"),
+                )
+                .select_from(OperationalFact)
+                .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+                .where(
+                    *base,
+                    UploadedFile.report_type_id == row.id,
+                    OperationalFact.report_date == row.latest_report_date,
+                    OperationalFact.metric_key == preview_metric.metric_key,
+                    OperationalFact.unit.is_not(None),
+                )
+                .group_by(OperationalFact.unit)
+                .order_by(func.sum(OperationalFact.value_numeric).desc())
+                .limit(10)
+            )
+            preview_chart = [
+                {"unit": item.unit, "value": round(_safe_float(item.value))}
+                for item in preview_result.all()
+            ]
+
+        summaries.append({
+            "report_type_id": str(row.id),
+            "report_type_name": row.name,
+            "report_type_code": row.code,
+            "latest_report_date": row.latest_report_date.isoformat(),
+            "kpis": [
+                kpis_by_key[metric_key]
+                for metric_key in _LANDING_KPI_METRICS
+                if metric_key in kpis_by_key
+            ],
+            "preview_metric_key": preview_metric.metric_key if preview_metric else None,
+            "preview_metric_label": (
+                preview_metric.label or preview_metric.metric_key
+                if preview_metric
+                else None
+            ),
+            "preview_chart": preview_chart,
+        })
+    return summaries
+
+
+async def _wf_test_t_stock_preview(session: AsyncSession) -> list[dict[str, Any]]:
+    """Return top units by t_stock for the latest date of the WF Test report type."""
+    # Find the report type for 'WF_TEST_AND_SHADE'
+    rt_stmt = select(ReportType).where(
+        func.lower(ReportType.code) == "wf_test_and_shade",
+        ReportType.deleted_at.is_(None),
+        ReportType.is_active.is_(True)
+    )
+    rt_res = await session.execute(rt_stmt)
+    rt = rt_res.scalar_one_or_none()
+    if not rt:
+        return []
+
+    base = _active_fact_base_filters()
+
+    # Find the latest report date for this report type
+    date_stmt = (
+        select(OperationalFact.report_date)
+        .select_from(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .where(
+            *base,
+            UploadedFile.report_type_id == rt.id,
+            OperationalFact.metric_key == "t_stock",
+            OperationalFact.report_date.is_not(None)
+        )
+        .group_by(OperationalFact.report_date)
+        .order_by(OperationalFact.report_date.desc())
+        .limit(1)
+    )
+    date_res = await session.execute(date_stmt)
+    latest_date = date_res.scalar_one_or_none()
+    if not latest_date:
+        return []
+
+    # Get the top 5 units by t_stock for this latest date
+    stmt = (
+        select(
+            OperationalFact.unit.label("unit"),
+            func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("value")
+        )
+        .select_from(OperationalFact)
+        .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+        .where(
+            *base,
+            UploadedFile.report_type_id == rt.id,
+            OperationalFact.metric_key == "t_stock",
+            OperationalFact.report_date == latest_date,
+            OperationalFact.unit.is_not(None)
+        )
+        .group_by(OperationalFact.unit)
+        .order_by(func.sum(OperationalFact.value_numeric).desc())
+        .limit(5)
+    )
+    res = await session.execute(stmt)
+    return [
+        {
+            "unit": row.unit,
+            "value": round(_safe_float(row.value)),
+            "date": latest_date.isoformat()
+        }
+        for row in res.all()
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Public endpoint
 # ---------------------------------------------------------------------------
@@ -433,6 +641,9 @@ async def get_landing_snapshot(session: SessionDep) -> dict[str, Any]:
         trend_dates = await _resolve_trend_dates(session, limit=10)
         trends = await _historical_trends(session, trend_dates)
 
+    report_types_summaries = await _get_active_report_types_summaries(session)
+    wf_test_chart = await _wf_test_t_stock_preview(session)
+
     # Serialize workbook summary for JSON transport.
     workbook_summary = None
     if workbook is not None:
@@ -456,4 +667,6 @@ async def get_landing_snapshot(session: SessionDep) -> dict[str, Any]:
         "insights": insights,
         "preview_charts": charts,
         "trends": trends,
+        "report_types": report_types_summaries,
+        "wf_test_preview_chart": wf_test_chart,
     }
