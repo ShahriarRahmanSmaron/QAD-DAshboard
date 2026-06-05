@@ -139,7 +139,6 @@ WF_TEST_AND_SHADE: ParserManifest = {
         "enable_diagnostics": True,
         "sections": [
             "executive_summary",
-            "top_movers",
             "historical_comparison",
             "unit_historical_comparison",
             "unit_analysis",

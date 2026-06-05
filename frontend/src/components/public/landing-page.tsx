@@ -374,7 +374,7 @@ export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
       .then((data) => {
         if (data) setSnapshot(data as LandingSnapshot);
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => setLoading(false));
   }, []);
 
@@ -420,127 +420,177 @@ export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
 
       {/* ====== SECTION 2 — REPORT SUMMARIES ====== */}
       <section className="py-20 px-6 max-w-5xl mx-auto border-t border-border">
-        <div className="mb-10">
+        <div className="mb-10 text-center">
           <p className="text-xs uppercase tracking-widest text-muted-foreground font-bold">
-            Latest Report Summaries
+            Report Summaries
           </p>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight text-foreground">
+          <h2 className="mt-1 text-3xl font-bold tracking-tight text-foreground">
             Current operational snapshot by report type
           </h2>
         </div>
-        <div className="space-y-10">
-          {snapshot?.report_types?.map((reportType) => (
-            <div key={reportType.report_type_id} className="grid gap-6 lg:grid-cols-[220px_1fr] lg:items-stretch">
-              <div className="flex flex-col justify-center rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] p-6">
-                <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
-                  <CheckCircle2 className="size-5" />
-                  <span className="text-xs font-bold uppercase tracking-widest">Latest report</span>
-                </div>
-                <h3 className="mt-4 text-xl font-bold text-foreground">{reportType.report_type_name}</h3>
-                <p className="mt-2 text-sm font-medium tabular-nums text-muted-foreground">
-                  {formatShortDate(reportType.latest_report_date)}
-                </p>
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                {reportType.kpis.map((kpi) => (
-                  <div key={kpi.metric_key} className="rounded-lg border border-border bg-card p-6 shadow-sm">
-                    <span className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
-                      {kpi.label}
-                    </span>
-                    <p className="mt-4 text-3xl font-normal tracking-tight text-foreground tabular-nums">
-                      {kpi.value.toLocaleString()}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
 
-      {/* ====== SECTION 3 — KEY OPERATIONAL MOVEMENTS ====== */}
-      <section className="py-20 px-6 max-w-5xl mx-auto border-t border-border">
-        <div className="mb-8">
-          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Key Operational Movements
-          </p>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight text-foreground">
-            Latest report previews
-          </h2>
-        </div>
-        <div className="space-y-8">
-          {snapshot?.report_types?.map((reportType) => (
-            <button
-              key={reportType.report_type_id}
-              type="button"
-              onClick={openLogin}
-              className="group grid w-full gap-6 rounded-xl border border-border bg-card p-6 text-left shadow-sm transition hover:border-primary/40 hover:shadow-md lg:grid-cols-[220px_1fr] lg:p-8"
-            >
-              <div className="flex flex-col justify-center">
-                <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                  Report Type
-                </span>
-                <h3 className="mt-3 text-2xl font-bold text-foreground">
-                  {reportType.report_type_name}
-                </h3>
-                <p className="mt-3 text-sm font-medium tabular-nums text-muted-foreground">
-                  {formatShortDate(reportType.latest_report_date)}
-                </p>
-                <span className="mt-5 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-primary">
-                  Open full analytics
-                  <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-                </span>
-              </div>
-              <div className="min-h-[280px] rounded-lg border border-border/70 bg-background/40 p-4">
-                <div className="mb-3">
-                  <h4 className="text-sm font-semibold text-foreground">
-                    {reportType.preview_metric_label ?? "Metric"} by Unit
-                  </h4>
-                  <p className="text-xs text-muted-foreground">
-                    Latest report date: {formatShortDate(reportType.latest_report_date)}
-                  </p>
+        <div className="grid gap-8 md:grid-cols-2">
+          {snapshot?.report_types?.map((reportType) => {
+            const isPd = reportType.report_type_code?.toLowerCase() === "pd_summary";
+            const isWf = reportType.report_type_code?.toLowerCase() === "wf_test_and_shade";
+
+            // Extract the required KPIs
+            const kpisMap = new Map(reportType.kpis.map(kpi => [kpi.metric_key, kpi]));
+
+            const navigateToDashboard = () => {
+              const targetPath = `/reports/dashboard?reportTypeId=${reportType.report_type_id}`;
+              if (isAuthenticated) {
+                router.push(targetPath);
+              } else {
+                router.push(`/login?next=${encodeURIComponent(targetPath)}`);
+              }
+            };
+
+            return (
+              <div
+                key={reportType.report_type_id}
+                onClick={navigateToDashboard}
+                className="flex flex-col justify-between rounded-xl border border-border bg-card p-6 shadow-sm hover:border-primary/40 hover:shadow-md cursor-pointer hover:bg-card/85 hover:scale-[1.01] transition-all duration-300"
+              >
+                <div>
+                  <div className="flex items-center justify-between border-b border-border pb-4 mb-4">
+                    <div>
+                      <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Report Type</span>
+                      <h3 className="text-xl font-bold text-foreground mt-1">{reportType.report_type_name}</h3>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">Latest Report</span>
+                      <p className="text-xs font-medium text-muted-foreground mt-1 tabular-nums">
+                        {formatShortDate(reportType.latest_report_date)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2 mt-4 mb-4">
+                    {isPd && (
+                      <>
+                        <div className="rounded-lg border border-border/60 bg-background/50 p-4">
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                            {kpisMap.get("pd_qty")?.label || "PD Qty (Grand Total)"}
+                          </span>
+                          <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+                            {kpisMap.get("pd_qty") ? Math.round(kpisMap.get("pd_qty")!.value).toLocaleString() : "—"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/60 bg-background/50 p-4">
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                            {kpisMap.get("pd_percent")?.label || "PD %"}
+                          </span>
+                          <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+                            {kpisMap.get("pd_percent") ? `${(kpisMap.get("pd_percent")!.value * 100).toFixed(2)}%` : "—"}
+                          </p>
+                        </div>
+                      </>
+                    )}
+
+                    {isWf && (
+                      <>
+                        <div className="rounded-lg border border-border/60 bg-background/50 p-4">
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                            {kpisMap.get("t_stock")?.label || "T/Stock"}
+                          </span>
+                          <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+                            {kpisMap.get("t_stock") ? Math.round(kpisMap.get("t_stock")!.value).toLocaleString() : "—"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/60 bg-background/50 p-4">
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                            {kpisMap.get("wait_for_test")?.label || "Wait For Test"}
+                          </span>
+                          <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+                            {kpisMap.get("wait_for_test") ? Math.round(kpisMap.get("wait_for_test")!.value).toLocaleString() : "—"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/60 bg-background/50 p-4">
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                            {kpisMap.get("wait_for_shade")?.label || "Wait For Shade"}
+                          </span>
+                          <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+                            {kpisMap.get("wait_for_shade") ? Math.round(kpisMap.get("wait_for_shade")!.value).toLocaleString() : "—"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/60 bg-background/50 p-4">
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                            {kpisMap.get("wait_for_rfd")?.label || "Wait For RFD"}
+                          </span>
+                          <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground tabular-nums">
+                            {kpisMap.get("wait_for_rfd") ? Math.round(kpisMap.get("wait_for_rfd")!.value).toLocaleString() : "—"}
+                          </p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Horizontal Bar Chart for both Snapshot Cards */}
+                  <div className="h-44 w-full mt-4 mb-4" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-xs font-semibold text-muted-foreground mb-2">
+                      {isPd ? "PD Qty by Unit" : "T/Stock by Unit"}
+                    </p>
+                    {reportType.preview_chart && reportType.preview_chart.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={reportType.preview_chart}
+                          layout="vertical"
+                          margin={{ top: 5, right: 10, left: -20, bottom: 5 }}
+                        >
+                          <XAxis type="number" hide />
+                          <YAxis
+                            dataKey="unit"
+                            type="category"
+                            stroke="var(--border)"
+                            tick={{ fill: "var(--muted-foreground)", fontSize: 10 }}
+                            tickLine={false}
+                            axisLine={false}
+                            width={90}
+                          />
+                          <Tooltip
+                            cursor={{ fill: 'var(--muted)' }}
+                            contentStyle={{
+                              background: 'var(--card)',
+                              border: '1px solid var(--border)',
+                              borderRadius: '6px',
+                              fontSize: '11px',
+                              color: 'var(--foreground)',
+                            }}
+                            labelStyle={{ color: 'var(--foreground)' }}
+                          />
+                          <Bar
+                            dataKey="value"
+                            name={isPd ? "PD Qty(Kg)" : "T/Stock"}
+                            fill="#c15f3c"
+                            radius={[0, 4, 4, 0]}
+                            barSize={12}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-xs text-muted-foreground border border-dashed border-border rounded-lg bg-background/25">
+                        No preview data available
+                      </div>
+                    )}
+                  </div>
                 </div>
-                {reportType.preview_chart.length > 0 ? (
-                  <div className="h-[220px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={reportType.preview_chart}
-                        layout="vertical"
-                        margin={{ top: 0, right: 24, left: 4, bottom: 0 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border)" />
-                        <XAxis
-                          type="number"
-                          tick={{ fill: "var(--muted-foreground)", fontSize: 10 }}
-                          tickLine={false}
-                          axisLine={false}
-                          tickFormatter={(value: number) => value.toLocaleString()}
-                        />
-                        <YAxis
-                          dataKey="unit"
-                          type="category"
-                          tick={{ fill: "var(--muted-foreground)", fontSize: 10 }}
-                          tickLine={false}
-                          axisLine={false}
-                          width={70}
-                        />
-                        <Bar
-                          dataKey="value"
-                          name={reportType.preview_metric_label ?? "Value"}
-                          fill="#c15f3c"
-                          radius={[0, 4, 4, 0]}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                ) : (
-                  <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
-                    No unit chart data available
-                  </div>
-                )}
+
+                <div className="mt-auto pt-4 border-t border-border/40">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigateToDashboard();
+                    }}
+                    className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary/10 border border-primary/20 text-primary py-2 px-4 text-sm font-semibold hover:bg-primary hover:text-white transition-all duration-300"
+                  >
+                    Open Dashboard
+                    <ArrowRight className="size-4" />
+                  </button>
+                </div>
               </div>
-            </button>
-          ))}
+            );
+          })}
         </div>
       </section>
 
@@ -577,13 +627,19 @@ export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
             );
           })}
         </div>
-        <div className="mt-10 text-center">
+        <div className="mt-16 text-center border-t border-border/40 pt-12 max-w-xl mx-auto">
+          <h3 className="text-2xl font-bold tracking-tight text-foreground mb-3">
+            Secure Access to Operational Intelligence
+          </h3>
+          <p className="text-sm text-muted-foreground mb-6">
+            Sign in to access real-time dashboards, workbook management, and deep manufacturing insights.
+          </p>
           <button
             type="button"
             onClick={openLogin}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-7 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 active:scale-95"
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-8 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 active:scale-95"
           >
-            {isAuthenticated ? "Open QAD Portal" : "Sign in to QAD Portal"}
+            {isAuthenticated ? "Open QAD Portal" : "Sign In to QAD Portal"}
             <ArrowRight className="size-4" />
           </button>
           <p className="mt-3 text-xs text-muted-foreground">Secure access for your operational team.</p>

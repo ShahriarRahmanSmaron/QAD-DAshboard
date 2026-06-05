@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import { FileSpreadsheet, Printer, Sliders, CalendarDays, RefreshCw, BarChart3, Database } from "lucide-react";
 import { getChartTimeSeries } from "@/lib/charts/api";
 import { listReportTypes } from "@/lib/reports/api";
@@ -38,12 +39,15 @@ function toNumber(value: string | number | null | undefined): number {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-export function DynamicDashboard({ user }: { user?: AuthUser }) {
+function DynamicDashboardInner({ user }: { user?: AuthUser }) {
+  const searchParams = useSearchParams();
+  const reportTypeIdParam = searchParams ? (searchParams.get("reportTypeId") || "") : "";
+
   // ---------------------------------------------------------------------------
   // Control state
   // ---------------------------------------------------------------------------
   const [state, setState] = useState<Record<string, string>>({
-    reportTypeId: "",
+    reportTypeId: reportTypeIdParam,
     metric: "",
     dateRange: "30d",
     customFrom: "",
@@ -140,6 +144,12 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
 
   const reportTypes = useMemo(() => reportTypesQuery.data?.report_types ?? [], [reportTypesQuery.data]);
 
+  useEffect(() => {
+    if (!state.reportTypeId && reportTypes.length > 0 && reportTypes[0]) {
+      patch({ reportTypeId: reportTypes[0].id });
+    }
+  }, [state.reportTypeId, reportTypes]);
+
   const selectedReportType = useMemo(
     () => reportTypes.find((rt) => rt.id === state.reportTypeId),
     [reportTypes, state.reportTypeId]
@@ -204,7 +214,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
 
   // Initialize metric, dates, and dynamic landing state based on dashboard manifest
   useEffect(() => {
-    if (!dashboardConfig || !availableDates.length) return;
+    if (!state.reportTypeId || !dashboardConfig || !availableDates.length) return;
     const latest = availableDates[availableDates.length - 1]!;
     const previous = availableDates.length > 1 ? availableDates[availableDates.length - 2]! : "";
 
@@ -230,7 +240,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
     if (Object.keys(patchPayload).length > 0) {
       patch(patchPayload);
     }
-  }, [dashboardConfig, availableDates]);
+  }, [state.reportTypeId, state.metric, state.selectedCurrentDate, state.selectedComparisonDate, dashboardConfig, availableDates, isWF]);
 
   // Dynamic filter query params to pass to charts/aggregation
   const dynamicFilterParams = useMemo(() => {
@@ -1572,15 +1582,12 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                   <section key={sectionName} ref={unitExplorerRef} className="scroll-mt-6">
                     <details
                       open={unitExplorerExpanded}
+                      onToggle={(e) => {
+                        setUnitExplorerExpanded(e.currentTarget.open);
+                      }}
                       className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
                     >
-                      <summary 
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setUnitExplorerExpanded(prev => !prev);
-                        }}
-                        className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none"
-                      >
+                      <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
                         <div className="flex flex-col">
                           <span className="text-base font-bold">Unit Explorer</span>
                           <span className="text-xs text-muted-foreground font-normal">Detailed investigation of unit performance</span>
@@ -1629,6 +1636,8 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                   dateWindow={dateWindow}
                   comparisonPair={comparisonPair}
                   handleCategoryClick={handleCategoryClick}
+                  isExpanded={!!explorerStates.unit}
+                  onToggle={(open) => setExplorerStates(prev => ({ ...prev, unit: open }))}
                 />
               ) : null;
 
@@ -1648,6 +1657,8 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                   dateWindow={dateWindow}
                   comparisonPair={comparisonPair}
                   handleCategoryClick={handleCategoryClick}
+                  isExpanded={!!explorerStates.sub_unit}
+                  onToggle={(open) => setExplorerStates(prev => ({ ...prev, sub_unit: open }))}
                 />
               ) : null;
 
@@ -1667,6 +1678,8 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                   dateWindow={dateWindow}
                   comparisonPair={comparisonPair}
                   handleCategoryClick={handleCategoryClick}
+                  isExpanded={!!explorerStates.department}
+                  onToggle={(open) => setExplorerStates(prev => ({ ...prev, department: open }))}
                 />
               ) : null;
 
@@ -1676,15 +1689,12 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                   <section key={sectionName} ref={buyerExplorerRef} className="scroll-mt-6">
                     <details
                       open={buyerExplorerExpanded}
+                      onToggle={(e) => {
+                        setBuyerExplorerExpanded(e.currentTarget.open);
+                      }}
                       className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
                     >
-                      <summary 
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setBuyerExplorerExpanded(prev => !prev);
-                        }}
-                        className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none"
-                      >
+                      <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
                         <div className="flex flex-col">
                           <span className="text-base font-bold">Buyer Explorer</span>
                           <span className="text-xs text-muted-foreground font-normal">Detailed investigation of buyer performance</span>
@@ -1733,6 +1743,8 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                   dateWindow={dateWindow}
                   comparisonPair={comparisonPair}
                   handleCategoryClick={handleCategoryClick}
+                  isExpanded={!!explorerStates.buyer}
+                  onToggle={(open) => setExplorerStates(prev => ({ ...prev, buyer: open }))}
                 />
               ) : null;
 
@@ -1741,15 +1753,12 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                 return (
                   <details 
                     open={diagnosticsExpanded}
+                    onToggle={(e) => {
+                      setDiagnosticsExpanded(e.currentTarget.open);
+                    }}
                     className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
                   >
-                    <summary 
-                      onClick={(e) => {
-                        e.preventDefault();
-                        setDiagnosticsExpanded(prev => !prev);
-                      }}
-                      className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none"
-                    >
+                    <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
                       Diagnostics
                       <span className="ml-4 transition-transform duration-200 group-open:rotate-180 text-muted-foreground">
                         ▼
@@ -1769,7 +1778,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                           />
                         )}
                       </section>
-
+ 
                       {/* Delta Heatmap (at bottom) */}
                       <section>
                         <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-muted-foreground">
@@ -1790,15 +1799,12 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
               return (
                  <details 
                    open={diagnosticsExpanded}
+                   onToggle={(e) => {
+                     setDiagnosticsExpanded(e.currentTarget.open);
+                   }}
                    className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
                  >
-                   <summary 
-                     onClick={(e) => {
-                       e.preventDefault();
-                       setDiagnosticsExpanded(prev => !prev);
-                     }}
-                     className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none"
-                   >
+                   <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
                      Diagnostics Section
                      <span className="ml-4 transition-transform duration-200 group-open:rotate-180 text-muted-foreground">
                        ▼
@@ -1818,7 +1824,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                             />
                           )}
                         </div>
-
+ 
                         {/* PD% Trend Line */}
                         <div className="rounded-lg border border-border bg-card p-4">
                           <h4 className="text-sm font-semibold mb-3">PD% Trend Line</h4>
@@ -1830,7 +1836,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                             />
                           )}
                         </div>
-
+ 
                         {/* PD Qty By Unit */}
                         <div className="rounded-lg border border-border bg-card p-4">
                           <h4 className="text-sm font-semibold mb-3">PD Qty by Unit</h4>
@@ -1842,7 +1848,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                             />
                           )}
                         </div>
-
+ 
                         {/* PD Qty By Sub Unit */}
                         <div className="rounded-lg border border-border bg-card p-4">
                           <h4 className="text-sm font-semibold mb-3">PD Qty by Sub Unit</h4>
@@ -1873,7 +1879,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
   );
 }
 
-// Explorer Container helper component to manage dimension explorers directly without collapse
+// Explorer Container helper component to manage dimension explorers directly with collapsible details
 function DimensionExplorerContainer({
   dimensionKey,
   dimensionLabel,
@@ -1887,6 +1893,8 @@ function DimensionExplorerContainer({
   dateWindow,
   comparisonPair,
   handleCategoryClick,
+  isExpanded,
+  onToggle,
 }: {
   dimensionKey: string;
   dimensionLabel: string;
@@ -1900,31 +1908,50 @@ function DimensionExplorerContainer({
   dateWindow: any;
   comparisonPair: any;
   handleCategoryClick: (dim: string, val: string) => void;
+  isExpanded: boolean;
+  onToggle: (open: boolean) => void;
 }) {
   return (
-    <section id={`${dimensionKey}-analysis-section`} className="scroll-mt-6 rounded-lg border border-border bg-card shadow-sm p-4 space-y-4">
-      <div className="flex flex-col">
-        <span className="text-base font-bold">{dimensionLabel} Analysis</span>
-        <span className="text-xs text-muted-foreground font-normal">Compare and analyze {dimensionLabel.toLowerCase()} performance</span>
-      </div>
-      <div className="border-t border-border pt-4">
-        <DimensionExplorer
-          dimensionKey={dimensionKey}
-          dimensionLabel={dimensionLabel}
-          contributionDimensionKey={contribKey}
-          contributionDimensionLabel={contribLabel}
-          selectedVal={explorerValues[dimensionKey] ?? null}
-          onValChange={(v) => setExplorerValues(prev => ({ ...prev, [dimensionKey]: v }))}
-          availableVals={availableUnits}
-          metric={state.metric}
-          metricLabel={metricLabel}
-          reportTypeId={state.reportTypeId}
-          dateWindow={dateWindow}
-          latestDate={comparisonPair.current!}
-          previousDate={comparisonPair.previous}
-          onCategoryClick={handleCategoryClick}
-        />
-      </div>
+    <section id={`${dimensionKey}-analysis-section`} className="scroll-mt-6">
+      <details
+        open={isExpanded}
+        onToggle={(e) => onToggle(e.currentTarget.open)}
+        className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
+      >
+        <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
+          <div className="flex flex-col">
+            <span className="text-base font-bold">{dimensionLabel} Explorer</span>
+            <span className="text-xs text-muted-foreground font-normal">Compare and analyze {dimensionLabel.toLowerCase()} performance</span>
+          </div>
+          <span className="ml-4 transition-transform duration-200 group-open:rotate-180 text-muted-foreground">
+            ▼
+          </span>
+        </summary>
+        <div className="px-4 pt-2 border-t border-border mt-2">
+          {isExpanded ? (
+            <DimensionExplorer
+              dimensionKey={dimensionKey}
+              dimensionLabel={dimensionLabel}
+              contributionDimensionKey={contribKey}
+              contributionDimensionLabel={contribLabel}
+              selectedVal={explorerValues[dimensionKey] ?? null}
+              onValChange={(v) => setExplorerValues(prev => ({ ...prev, [dimensionKey]: v }))}
+              availableVals={availableUnits}
+              metric={state.metric}
+              metricLabel={metricLabel}
+              reportTypeId={state.reportTypeId}
+              dateWindow={dateWindow}
+              latestDate={comparisonPair.current!}
+              previousDate={comparisonPair.previous}
+              onCategoryClick={handleCategoryClick}
+            />
+          ) : (
+            <div className="flex h-24 items-center justify-center text-sm text-muted-foreground italic">
+              Select a {dimensionLabel.toLowerCase()} to investigate
+            </div>
+          )}
+        </div>
+      </details>
     </section>
   );
 }
@@ -1950,5 +1977,18 @@ function ChartSkeleton({ label }: { label: string }) {
         <span className="text-sm text-muted-foreground">{label}</span>
       </div>
     </div>
+  );
+}
+
+export function DynamicDashboard(props: { user?: AuthUser }) {
+  return (
+    <Suspense fallback={
+      <div className="flex flex-col items-center justify-center p-12 text-center">
+        <div className="size-8 animate-spin rounded-full border-2 border-border border-t-primary" />
+        <p className="mt-3 text-sm text-muted-foreground">Loading dashboard...</p>
+      </div>
+    }>
+      <DynamicDashboardInner {...props} />
+    </Suspense>
   );
 }

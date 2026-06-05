@@ -17,12 +17,11 @@ function getSafeNextPath(nextPath: string | undefined) {
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
+  const params = await searchParams;
   const user = await getCurrentUser();
   if (user) {
-    redirect("/dashboard");
+    redirect(getSafeNextPath(params.next));
   }
-
-  const params = await searchParams;
 
   return <LoginForm nextPath={getSafeNextPath(params.next)} />;
 }

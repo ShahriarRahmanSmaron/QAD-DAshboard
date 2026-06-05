@@ -39,7 +39,7 @@ export function DashboardControls({
 
   return (
     <div className="space-y-4">
-      {/* 1. Report Type Card */}
+      {/* 1. Report Selection Card (includes Business Filters when Report Type is selected) */}
       <div className="rounded-xl border border-border bg-card p-4 shadow-sm backdrop-blur">
         <div className="flex items-center gap-2 mb-3">
           <Database className="size-4 text-primary" />
@@ -47,14 +47,14 @@ export function DashboardControls({
             Report Selection
           </h3>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
+        
+        {!state.reportTypeId ? (
+          <div className="max-w-xs space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Report Type</label>
             <select
               value={state.reportTypeId}
               onChange={(e) => {
                 const val = e.target.value;
-                // Propagate reset of dimensions in parent via onChange
                 onChange({ reportTypeId: val });
               }}
               className={selectClass}
@@ -67,8 +67,27 @@ export function DashboardControls({
               ))}
             </select>
           </div>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Report Type</label>
+              <select
+                value={state.reportTypeId}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  onChange({ reportTypeId: val });
+                }}
+                className={selectClass}
+              >
+                <option value="">Select Report Type</option>
+                {reportTypes.map((rt) => (
+                  <option key={rt.id} value={rt.id}>
+                    {rt.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {state.reportTypeId && (
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Primary Metric</label>
               <select
@@ -84,20 +103,7 @@ export function DashboardControls({
                 ))}
               </select>
             </div>
-          )}
-        </div>
-      </div>
 
-      {/* 2. Business Filters Card */}
-      {state.reportTypeId && businessDimensions.length > 0 && (
-        <div className="rounded-xl border border-border bg-card p-4 shadow-sm backdrop-blur">
-          <div className="flex items-center gap-2 mb-3">
-            <Sliders className="size-4 text-primary" />
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-              Business Filters
-            </h3>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {businessDimensions.map((dim: any) => (
               <div key={dim.key} className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground">{dim.label}</label>
@@ -116,8 +122,8 @@ export function DashboardControls({
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* 3. Time & Comparison Controls Card */}
       {state.reportTypeId && (

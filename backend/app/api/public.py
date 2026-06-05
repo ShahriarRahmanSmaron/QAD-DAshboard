@@ -26,8 +26,8 @@ from app.reporting.models import OperationalFact, ReportType, UploadedFile, Unit
 router = APIRouter(prefix="/public", tags=["public"])
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 
-# The four core KPI metrics displayed on the landing page.
-_LANDING_KPI_METRICS = ["t_stock", "wait_for_test", "wait_for_shade", "wait_for_rfd"]
+# The six core KPI metrics displayed on the landing page.
+_LANDING_KPI_METRICS = ["t_stock", "wait_for_test", "wait_for_shade", "wait_for_rfd", "pd_qty", "pd_percent"]
 
 # Only active, non-archived workbook facts at the detail grain.
 _DETAIL_CLASSIFICATION = "detail"
@@ -202,13 +202,29 @@ async def _kpi_snapshot(
     base = _active_fact_base_filters()
     kpis: list[dict[str, Any]] = []
 
+    from app.reporting.repository import _get_agg_func_expr
+
     for metric_key in _LANDING_KPI_METRICS:
-        metric_filters = [*base, OperationalFact.metric_key == metric_key]
+        is_pd_metric = metric_key in ("pd_qty", "pd_percent")
+        if is_pd_metric:
+            metric_filters = [
+                OperationalFact.deleted_at.is_(None),
+                OperationalFact.is_active.is_(True),
+                UploadedFile.deleted_at.is_(None),
+                UploadedFile.is_active_workbook.is_(True),
+                UploadedFile.archived_at.is_(None),
+                OperationalFact.operational_section == "overall_summary_solid",
+                OperationalFact.metric_key == metric_key,
+            ]
+            agg_expr = func.sum(OperationalFact.value_numeric)
+        else:
+            metric_filters = [*base, OperationalFact.metric_key == metric_key]
+            agg_expr = _get_agg_func_expr(metric_key)
 
         # Current total.
         cur = await session.execute(
             select(
-                func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("total"),
+                func.coalesce(agg_expr, 0).label("total"),
                 func.max(OperationalFact.metric_label).label("label"),
             )
             .select_from(OperationalFact)
@@ -223,7 +239,7 @@ async def _kpi_snapshot(
         if previous_date is not None:
             prev = await session.execute(
                 select(
-                    func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("total"),
+                    func.coalesce(agg_expr, 0).label("total"),
                 )
                 .select_from(OperationalFact)
                 .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
@@ -239,12 +255,13 @@ async def _kpi_snapshot(
         if delta is not None:
             direction = "up" if delta > 0 else ("down" if delta < 0 else "flat")
 
+        # PD% must not be rounded to integer
         kpis.append({
             "metric_key": metric_key,
             "label": label,
-            "value": round(current_value),
-            "previous_value": round(previous_value) if previous_value is not None else None,
-            "delta": round(delta) if delta is not None else None,
+            "value": current_value if metric_key == "pd_percent" else round(current_value),
+            "previous_value": previous_value if metric_key == "pd_percent" else (round(previous_value) if previous_value is not None else None),
+            "delta": delta if metric_key == "pd_percent" else (round(delta) if delta is not None else None),
             "delta_percent": round(delta_pct, 1) if delta_pct is not None else None,
             "direction": direction,
         })
@@ -454,55 +471,68 @@ async def _get_active_report_types_summaries(session: AsyncSession) -> list[dict
     )
 
     summaries: list[dict[str, Any]] = []
+    from app.reporting.repository import _get_agg_func_expr
+    agg_expr = _get_agg_func_expr(None, group_by_metric=True)
+
     for row in result.all():
-        kpi_result = await session.execute(
-            select(
-                OperationalFact.metric_key,
-                func.max(OperationalFact.metric_label).label("label"),
-                func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("value"),
+        is_pd = row.code.lower() == "pd_summary"
+
+        if is_pd:
+            kpi_result = await session.execute(
+                select(
+                    OperationalFact.metric_key,
+                    func.max(OperationalFact.metric_label).label("label"),
+                    func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("value"),
+                )
+                .select_from(OperationalFact)
+                .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+                .where(
+                    OperationalFact.deleted_at.is_(None),
+                    OperationalFact.is_active.is_(True),
+                    UploadedFile.deleted_at.is_(None),
+                    UploadedFile.is_active_workbook.is_(True),
+                    UploadedFile.archived_at.is_(None),
+                    UploadedFile.report_type_id == row.id,
+                    OperationalFact.report_date == row.latest_report_date,
+                    OperationalFact.operational_section == "overall_summary_solid",
+                    OperationalFact.metric_key.in_(_LANDING_KPI_METRICS),
+                )
+                .group_by(OperationalFact.metric_key)
             )
-            .select_from(OperationalFact)
-            .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
-            .where(
-                *base,
-                UploadedFile.report_type_id == row.id,
-                OperationalFact.report_date == row.latest_report_date,
-                OperationalFact.metric_key.in_(_LANDING_KPI_METRICS),
+        else:
+            kpi_result = await session.execute(
+                select(
+                    OperationalFact.metric_key,
+                    func.max(OperationalFact.metric_label).label("label"),
+                    func.coalesce(agg_expr, 0).label("value"),
+                )
+                .select_from(OperationalFact)
+                .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+                .where(
+                    *base,
+                    UploadedFile.report_type_id == row.id,
+                    OperationalFact.report_date == row.latest_report_date,
+                    OperationalFact.metric_key.in_(_LANDING_KPI_METRICS),
+                )
+                .group_by(OperationalFact.metric_key)
             )
-            .group_by(OperationalFact.metric_key)
-        )
+
         kpis_by_key = {
             item.metric_key: {
                 "metric_key": item.metric_key,
                 "label": item.label or item.metric_key,
-                "value": round(_safe_float(item.value)),
+                "value": _safe_float(item.value) if item.metric_key == "pd_percent" else round(_safe_float(item.value)),
             }
             for item in kpi_result.all()
         }
 
-        preview_metric_result = await session.execute(
-            select(
-                OperationalFact.metric_key,
-                func.max(OperationalFact.metric_label).label("label"),
-            )
-            .select_from(OperationalFact)
-            .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
-            .where(
-                *base,
-                UploadedFile.report_type_id == row.id,
-                OperationalFact.report_date == row.latest_report_date,
-                OperationalFact.unit.is_not(None),
-            )
-            .group_by(OperationalFact.metric_key)
-            .order_by(
-                (OperationalFact.metric_key == "t_stock").desc(),
-                OperationalFact.metric_key,
-            )
-            .limit(1)
-        )
-        preview_metric = preview_metric_result.one_or_none()
         preview_chart: list[dict[str, Any]] = []
-        if preview_metric is not None:
+        preview_metric_key = None
+        preview_metric_label = None
+
+        if is_pd:
+            preview_metric_key = "pd_qty"
+            preview_metric_label = "PD Qty(Kg)"
             preview_result = await session.execute(
                 select(
                     OperationalFact.unit.label("unit"),
@@ -514,17 +544,67 @@ async def _get_active_report_types_summaries(session: AsyncSession) -> list[dict
                     *base,
                     UploadedFile.report_type_id == row.id,
                     OperationalFact.report_date == row.latest_report_date,
-                    OperationalFact.metric_key == preview_metric.metric_key,
-                    OperationalFact.unit.is_not(None),
+                    OperationalFact.metric_key == "pd_qty",
+                    OperationalFact.unit.in_([
+                        "Color City Ltd",
+                        "Hamza Textile Ltd-02",
+                        "Mymun & Hamza Textiles Ltd"
+                    ]),
                 )
                 .group_by(OperationalFact.unit)
                 .order_by(func.sum(OperationalFact.value_numeric).desc())
-                .limit(10)
             )
             preview_chart = [
                 {"unit": item.unit, "value": round(_safe_float(item.value))}
                 for item in preview_result.all()
             ]
+        else:
+            preview_metric_result = await session.execute(
+                select(
+                    OperationalFact.metric_key,
+                    func.max(OperationalFact.metric_label).label("label"),
+                )
+                .select_from(OperationalFact)
+                .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+                .where(
+                    *base,
+                    UploadedFile.report_type_id == row.id,
+                    OperationalFact.report_date == row.latest_report_date,
+                    OperationalFact.unit.is_not(None),
+                )
+                .group_by(OperationalFact.metric_key)
+                .order_by(
+                    (OperationalFact.metric_key == "t_stock").desc(),
+                    OperationalFact.metric_key,
+                )
+                .limit(1)
+            )
+            preview_metric = preview_metric_result.one_or_none()
+            if preview_metric is not None:
+                preview_metric_key = preview_metric.metric_key
+                preview_metric_label = preview_metric.label or preview_metric.metric_key
+                preview_result = await session.execute(
+                    select(
+                        OperationalFact.unit.label("unit"),
+                        func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("value"),
+                    )
+                    .select_from(OperationalFact)
+                    .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+                    .where(
+                        *base,
+                        UploadedFile.report_type_id == row.id,
+                        OperationalFact.report_date == row.latest_report_date,
+                        OperationalFact.metric_key == preview_metric.metric_key,
+                        OperationalFact.unit.is_not(None),
+                    )
+                    .group_by(OperationalFact.unit)
+                    .order_by(func.sum(OperationalFact.value_numeric).desc())
+                    .limit(10)
+                )
+                preview_chart = [
+                    {"unit": item.unit, "value": round(_safe_float(item.value))}
+                    for item in preview_result.all()
+                ]
 
         summaries.append({
             "report_type_id": str(row.id),
@@ -536,12 +616,8 @@ async def _get_active_report_types_summaries(session: AsyncSession) -> list[dict
                 for metric_key in _LANDING_KPI_METRICS
                 if metric_key in kpis_by_key
             ],
-            "preview_metric_key": preview_metric.metric_key if preview_metric else None,
-            "preview_metric_label": (
-                preview_metric.label or preview_metric.metric_key
-                if preview_metric
-                else None
-            ),
+            "preview_metric_key": preview_metric_key,
+            "preview_metric_label": preview_metric_label,
             "preview_chart": preview_chart,
         })
     return summaries
