@@ -223,12 +223,22 @@ export type Dimension = {
   depends_on?: string;
 };
 
+export type DashboardConfig = {
+  primary_metrics?: string[];
+  dimensions: string[];
+  default_group_by?: string;
+  enable_historical?: boolean;
+  enable_diagnostics?: boolean;
+  sections: string[];
+};
+
 export type ParserManifest = {
   parser_code: string;
   display_name: string;
   dimensions: Dimension[];
   default_grouping: string[];
   hidden_dimensions: string[];
+  dashboard?: DashboardConfig | null;
 };
 
 export type ReportTypeOption = {

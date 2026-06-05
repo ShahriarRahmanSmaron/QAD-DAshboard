@@ -55,7 +55,7 @@ async def chart_time_series(
     date_from: date | None = None,
     date_to: date | None = None,
     classification: str | None = None,
-    series_by: Annotated[str | None, Query(pattern="^(buyer|unit|section)$")] = None,
+    series_by: Annotated[str | None, Query(pattern="^(buyer|unit|sub_unit|department|section)$")] = None,
     limit: Annotated[int, Query(ge=1, le=365)] = 180,
 ) -> OperationalTrendResponse:
     """Time series data for line/area charts.
@@ -117,7 +117,7 @@ async def export_chart_time_series(
     date_from: date | None = None,
     date_to: date | None = None,
     classification: str | None = None,
-    series_by: Annotated[str | None, Query(pattern="^(buyer|unit|section)$")] = None,
+    series_by: Annotated[str | None, Query(pattern="^(buyer|unit|sub_unit|department|section)$")] = None,
     limit: Annotated[int, Query(ge=1, le=365)] = 365,
 ) -> Response:
     binary = await build_trend_xlsx(

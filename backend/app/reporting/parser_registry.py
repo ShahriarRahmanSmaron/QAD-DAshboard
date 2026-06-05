@@ -30,12 +30,69 @@ class Dimension(TypedDict):
     depends_on: str | None  # Cascading: parent dimension key
 
 
+class MetricMetadata(TypedDict):
+    metric_key: str
+    aggregation: Literal["sum", "avg", "formula"]
+    display_format: Literal["number", "percentage"]
+    historical_comparison: bool
+
+
+METRICS_REGISTRY: dict[str, MetricMetadata] = {
+    "pd_percent": {
+        "metric_key": "pd_percent",
+        "aggregation": "formula",
+        "display_format": "percentage",
+        "historical_comparison": True
+    },
+    "pd_qty": {
+        "metric_key": "pd_qty",
+        "aggregation": "sum",
+        "display_format": "number",
+        "historical_comparison": True
+    },
+    "t_stock": {
+        "metric_key": "t_stock",
+        "aggregation": "sum",
+        "display_format": "number",
+        "historical_comparison": True
+    },
+    "wait_for_test": {
+        "metric_key": "wait_for_test",
+        "aggregation": "sum",
+        "display_format": "number",
+        "historical_comparison": True
+    },
+    "wait_for_shade": {
+        "metric_key": "wait_for_shade",
+        "aggregation": "sum",
+        "display_format": "number",
+        "historical_comparison": True
+    },
+    "wait_for_rfd": {
+        "metric_key": "wait_for_rfd",
+        "aggregation": "sum",
+        "display_format": "number",
+        "historical_comparison": True
+    },
+}
+
+
+class DashboardManifest(TypedDict):
+    primary_metrics: list[str]
+    dimensions: list[str]
+    default_group_by: str
+    enable_historical: bool
+    enable_diagnostics: bool
+    sections: list[str]
+
+
 class ParserManifest(TypedDict):
     parser_code: str
     display_name: str
     dimensions: list[Dimension]
     default_grouping: list[str]   # Multi-level, e.g. ["unit", "sub_unit"]
     hidden_dimensions: list[str]
+    dashboard: DashboardManifest | None
 
 
 def _dim(
@@ -74,6 +131,22 @@ WF_TEST_AND_SHADE: ParserManifest = {
     ],
     "default_grouping": ["buyer"],
     "hidden_dimensions": [],
+    "dashboard": {
+        "primary_metrics": ["t_stock", "wait_for_test", "wait_for_shade", "wait_for_rfd"],
+        "dimensions": ["unit", "buyer"],
+        "default_group_by": "unit",
+        "enable_historical": True,
+        "enable_diagnostics": True,
+        "sections": [
+            "executive_summary",
+            "top_movers",
+            "historical_comparison",
+            "unit_historical_comparison",
+            "unit_analysis",
+            "buyer_analysis",
+            "diagnostics"
+        ]
+    }
 }
 
 PD_SUMMARY: ParserManifest = {
@@ -88,6 +161,22 @@ PD_SUMMARY: ParserManifest = {
     ],
     "default_grouping": ["unit", "sub_unit"],
     "hidden_dimensions": [],
+    "dashboard": {
+        "primary_metrics": ["pd_qty", "pd_percent"],
+        "dimensions": ["unit", "sub_unit", "department"],
+        "default_group_by": "sub_unit",
+        "enable_historical": True,
+        "enable_diagnostics": True,
+        "sections": [
+            "executive_summary",
+            "top_movers",
+            "historical_comparison",
+            "unit_analysis",
+            "sub_unit_analysis",
+            "department_analysis",
+            "diagnostics"
+        ]
+    }
 }
 
 # ---------------------------------------------------------------------------

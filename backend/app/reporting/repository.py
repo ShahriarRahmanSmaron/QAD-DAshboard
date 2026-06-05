@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Select, delete, func, or_, select, true
+from sqlalchemy import Select, delete, func, or_, select, true, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.interfaces import ExecutableOption
@@ -706,28 +706,25 @@ async def resolve_latest_date_if_needed(
     user: AuthUser,
     filters: OperationalFactFilters,
 ) -> OperationalFactFilters:
-    """If no report date/range is specified, and report_type is PD Summary, auto-select the latest date."""
+    """If no report date/range is specified, auto-select the latest date."""
     if filters.report_type_id and filters.report_date is None and filters.date_from is None and filters.date_to is None:
-        rt_stmt = select(ReportType.code).where(ReportType.id == filters.report_type_id)
-        rt_code = (await session.execute(rt_stmt)).scalar_one_or_none()
-        if rt_code and rt_code.lower() == "pd_summary":
-            latest_date_stmt = (
-                select(func.max(OperationalFact.report_date))
-                .select_from(OperationalFact)
-                .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
-                .where(
-                    UploadedFile.report_type_id == filters.report_type_id,
-                    OperationalFact.deleted_at.is_(None),
-                    OperationalFact.is_active.is_(True),
-                    UploadedFile.deleted_at.is_(None),
-                    UploadedFile.is_active_workbook.is_(True),
-                    UploadedFile.archived_at.is_(None),
-                    _uploaded_file_access_filter(user),
-                )
+        latest_date_stmt = (
+            select(func.max(OperationalFact.report_date))
+            .select_from(OperationalFact)
+            .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
+            .where(
+                UploadedFile.report_type_id == filters.report_type_id,
+                OperationalFact.deleted_at.is_(None),
+                OperationalFact.is_active.is_(True),
+                UploadedFile.deleted_at.is_(None),
+                UploadedFile.is_active_workbook.is_(True),
+                UploadedFile.archived_at.is_(None),
+                _uploaded_file_access_filter(user),
             )
-            latest_date = (await session.execute(latest_date_stmt)).scalar_one_or_none()
-            if latest_date:
-                return replace(filters, report_date=latest_date)
+        )
+        latest_date = (await session.execute(latest_date_stmt)).scalar_one_or_none()
+        if latest_date:
+            return replace(filters, report_date=latest_date)
     return filters
 
 
@@ -808,7 +805,7 @@ async def summarize_operational_facts(
             OperationalFact.unit,
             OperationalFact.report_date,
             func.count(OperationalFact.id).label("fact_count"),
-            func.sum(OperationalFact.value_numeric).label("numeric_total"),
+            _get_agg_func_expr(None, group_by_metric=True).label("numeric_total"),
             func.count(OperationalFact.id)
             .filter(OperationalFact.is_formula.is_(True))
             .label("formula_count"),
@@ -874,6 +871,21 @@ def _with_default_grain(filters: OperationalFactFilters) -> OperationalFactFilte
     return replace(filters, row_classification=_DETAIL_CLASSIFICATION)
 
 
+def _get_agg_func_expr(metric_key: str | None, group_by_metric: bool = False):
+    from app.reporting.parser_registry import METRICS_REGISTRY
+    avg_keys = [k for k, v in METRICS_REGISTRY.items() if v.get("aggregation") in ("avg", "formula")]
+    
+    if group_by_metric and avg_keys:
+        return case(
+            (OperationalFact.metric_key.in_(avg_keys), func.avg(OperationalFact.value_numeric)),
+            else_=func.sum(OperationalFact.value_numeric)
+        )
+    elif metric_key and metric_key.lower() in avg_keys:
+        return func.avg(OperationalFact.value_numeric)
+    else:
+        return func.sum(OperationalFact.value_numeric)
+
+
 async def aggregate_operational_facts(
     session: AsyncSession,
     *,
@@ -892,9 +904,10 @@ async def aggregate_operational_facts(
     clauses = _operational_fact_filters(user, _with_default_grain(resolved))
     requested = [key for key in (group_by or []) if key in _AGGREGATION_DIMENSIONS]
 
-    numeric_total = func.coalesce(func.sum(OperationalFact.value_numeric), 0).label(
-        "numeric_total"
-    )
+    numeric_total = func.coalesce(
+        _get_agg_func_expr(filters.metric_key, group_by_metric="metric" in requested),
+        0
+    ).label("numeric_total")
     fact_count = func.count(OperationalFact.id).label("fact_count")
     formula_count = (
         func.count(OperationalFact.id)
@@ -984,13 +997,15 @@ async def get_operational_trend(
     _SERIES_DIMENSIONS: dict[str, Any] = {
         "buyer": OperationalFact.buyer,
         "unit": OperationalFact.unit,
+        "sub_unit": OperationalFact.sub_unit,
+        "department": OperationalFact.department,
         "section": OperationalFact.operational_section,
     }
     series_col = _SERIES_DIMENSIONS.get(series_by) if series_by else None
 
     select_columns = [
         OperationalFact.report_date.label("report_date"),
-        func.coalesce(func.sum(OperationalFact.value_numeric), 0).label("numeric_total"),
+        func.coalesce(_get_agg_func_expr(metric_key), 0).label("numeric_total"),
         func.count(OperationalFact.id).label("fact_count"),
         func.count(OperationalFact.value_numeric).label("numeric_count"),
         func.array_agg(func.distinct(UploadedFile.original_filename)).label(
@@ -1146,7 +1161,7 @@ async def get_operational_comparison(
         clauses = _operational_fact_filters(user, _with_default_grain(filters))
         result = await session.execute(
             select(
-                func.sum(OperationalFact.value_numeric).label("numeric_total"),
+                _get_agg_func_expr(metric_key).label("numeric_total"),
                 func.count(OperationalFact.id).label("fact_count"),
                 func.count(OperationalFact.value_numeric).label("numeric_count"),
             )

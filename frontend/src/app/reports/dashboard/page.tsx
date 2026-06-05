@@ -1,9 +1,9 @@
 import { AppShell } from "@/components/layout/app-shell";
-import { ChartBuilderPage } from "@/components/charts/chart-builder-page";
+import { DynamicDashboard } from "@/components/dashboards/dynamic-dashboard";
 import { getCurrentUser } from "@/lib/auth/server";
 import { redirect } from "next/navigation";
 
-export default async function ChartsPage() {
+export default async function DashboardPage() {
   const user = await getCurrentUser();
 
   if (!user) {
@@ -12,7 +12,7 @@ export default async function ChartsPage() {
 
   return (
     <AppShell user={user}>
-      <ChartBuilderPage />
+      <DynamicDashboard user={user} />
     </AppShell>
   );
 }

@@ -38,15 +38,9 @@ const navigation = [
     roles: ["admin", "editor", "viewer"],
   },
   {
-    label: "Chart Builder",
-    href: "/reports/charts",
+    label: "Dashboard",
+    href: "/reports/dashboard",
     icon: BarChart3,
-    roles: ["admin", "editor", "viewer"],
-  },
-  {
-    label: "WF Test Dashboard",
-    href: "/reports/wf-test",
-    icon: FlaskConical,
     roles: ["admin", "editor", "viewer"],
   },
   {

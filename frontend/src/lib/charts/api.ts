@@ -67,13 +67,15 @@ export type ChartTimeSeriesParams = {
   metric: string;
   buyer?: string;
   unit?: string;
+  sub_unit?: string;
+  department?: string;
   section?: string;
   report_type_id?: string;
   date_from?: string;
   date_to?: string;
   classification?: string;
   /** MD08-2A: secondary grouping dimension for multi-series charts. */
-  series_by?: "buyer" | "unit" | "section";
+  series_by?: "buyer" | "unit" | "sub_unit" | "department" | "section";
   limit?: number;
 };
 
@@ -81,6 +83,8 @@ export type ChartGroupedParams = {
   group_by?: string[];
   buyer?: string;
   unit?: string;
+  sub_unit?: string;
+  department?: string;
   metric?: string;
   section?: string;
   report_type_id?: string;
@@ -91,8 +95,12 @@ export type ChartGroupedParams = {
 };
 
 export type ChartRankingsParams = {
-  rank_by?: "buyer" | "unit" | "metric" | "section";
+  rank_by?: "buyer" | "unit" | "metric" | "section" | "sub_unit" | "department";
   metric?: string;
+  buyer?: string;
+  unit?: string;
+  sub_unit?: string;
+  department?: string;
   section?: string;
   report_type_id?: string;
   date_from?: string;
@@ -102,9 +110,11 @@ export type ChartRankingsParams = {
 };
 
 export type ChartDistributionParams = {
-  distribute_by?: "buyer" | "unit" | "metric" | "section";
+  distribute_by?: "buyer" | "unit" | "metric" | "section" | "sub_unit" | "department";
   buyer?: string;
   unit?: string;
+  sub_unit?: string;
+  department?: string;
   section?: string;
   report_type_id?: string;
   date_from?: string;
