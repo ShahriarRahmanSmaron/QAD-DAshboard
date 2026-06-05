@@ -55,6 +55,8 @@ import {
   YAxis,
   Line,
   LineChart,
+  Cell,
+  LabelList,
 } from "recharts";
 
 // ---------------------------------------------------------------------------
@@ -362,6 +364,35 @@ function LoginModal({ open, onClose }: { open: boolean; onClose: () => void }) {
 // Main Landing Page
 // ---------------------------------------------------------------------------
 
+const UNIT_COLORS: Record<string, string> = {
+  // PD Summary units
+  "Color City Ltd": "#f97316", // Orange
+  "Hamza Textile Ltd-02": "#3b82f6", // Blue
+  "Mymun & Hamza Textiles Ltd": "#22c55e", // Green
+
+  // WF Test & Shade units
+  "CCL-A": "#f97316", // Orange
+  "HTL-02": "#3b82f6", // Blue
+  "CCL-B": "#22c55e", // Green
+  "DETEX": "#a855f7", // Purple
+  "CCL-07": "#14b8a6", // Teal
+  "HTL": "#ef4444", // Red
+  "MTL": "#6b7280", // Gray
+};
+
+function getUnitColor(unit: string): string {
+  return UNIT_COLORS[unit] || "#c15f3c";
+}
+
+function getShortUnitName(name: string): string {
+  if (!name) return "";
+  const n = name.trim();
+  if (n === "Color City Ltd") return "Color City Ltd";
+  if (n === "Hamza Textile Ltd-02") return "Hamza Textile";
+  if (n === "Mymun & Hamza Textiles Ltd") return "Mymun & Hamza";
+  return n;
+}
+
 export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
   const [snapshot, setSnapshot] = useState<LandingSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -527,26 +558,27 @@ export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
                   </div>
 
                   {/* Horizontal Bar Chart for both Snapshot Cards */}
-                  <div className="h-44 w-full mt-4 mb-4" onClick={(e) => e.stopPropagation()}>
-                    <p className="text-xs font-semibold text-muted-foreground mb-2">
+                  <div className="h-[220px] w-full mt-6 mb-6 px-2" onClick={(e) => e.stopPropagation()}>
+                    <h4 className="text-sm font-semibold text-foreground mb-4">
                       {isPd ? "PD Qty by Unit" : "T/Stock by Unit"}
-                    </p>
+                    </h4>
                     {reportType.preview_chart && reportType.preview_chart.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                           data={reportType.preview_chart}
                           layout="vertical"
-                          margin={{ top: 5, right: 10, left: -20, bottom: 5 }}
+                          margin={{ top: 5, right: 55, left: -15, bottom: 5 }}
                         >
                           <XAxis type="number" hide />
                           <YAxis
                             dataKey="unit"
                             type="category"
                             stroke="var(--border)"
-                            tick={{ fill: "var(--muted-foreground)", fontSize: 10 }}
+                            tick={{ fill: "var(--muted-foreground)", fontSize: 11, fontWeight: 500 }}
+                            tickFormatter={getShortUnitName}
                             tickLine={false}
                             axisLine={false}
-                            width={90}
+                            width={100}
                           />
                           <Tooltip
                             cursor={{ fill: 'var(--muted)' }}
@@ -562,10 +594,20 @@ export function LandingPage({ isAuthenticated }: { isAuthenticated: boolean }) {
                           <Bar
                             dataKey="value"
                             name={isPd ? "PD Qty(Kg)" : "T/Stock"}
-                            fill="#c15f3c"
                             radius={[0, 4, 4, 0]}
-                            barSize={12}
-                          />
+                            barSize={18}
+                          >
+                            {reportType.preview_chart.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={getUnitColor(entry.unit)} />
+                            ))}
+                            <LabelList
+                              dataKey="value"
+                              position="right"
+                              formatter={(v: any) => Number(v).toLocaleString()}
+                              className="fill-muted-foreground text-[11px] font-medium"
+                              offset={8}
+                            />
+                          </Bar>
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
