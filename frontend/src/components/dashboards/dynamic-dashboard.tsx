@@ -78,6 +78,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
   const [unitExplorerExpanded, setUnitExplorerExpanded] = useState(false);
   const [buyerExplorerExpanded, setBuyerExplorerExpanded] = useState(false);
   const [insightsExpanded, setInsightsExpanded] = useState(false);
+  const [diagnosticsExpanded, setDiagnosticsExpanded] = useState(false);
 
   const unitExplorerRef = useRef<HTMLDivElement>(null);
   const buyerExplorerRef = useRef<HTMLDivElement>(null);
@@ -1205,7 +1206,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                         <KpiCard
                           key={key}
                           kpi={kpi}
-                          formatValue={(v) => (typeof v === "number" ? (isPct ? `${v.toFixed(2)}%` : Math.round(v).toLocaleString()) : v)}
+                          formatValue={(v) => (typeof v === "number" ? (isPct ? `${(v * 100).toFixed(2)}%` : Math.round(v).toLocaleString()) : v)}
                           showSparkline
                         />
                       );
@@ -1248,7 +1249,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                       topMovers.map((mover, i) => {
                         const isInc = mover.color === "red";
                         const isPct = mover.metric.toLowerCase().includes("percent") || mover.metric.toLowerCase().includes("pct");
-                        const valStr = isPct ? `${Math.abs(mover.diff).toFixed(2)}%` : `${Math.round(Math.abs(mover.diff)).toLocaleString()} kg`;
+                        const valStr = isPct ? `${Math.abs(mover.diff * 100).toFixed(2)}%` : `${Math.round(Math.abs(mover.diff)).toLocaleString()} kg`;
                         return (
                           <div
                             key={i}
@@ -1325,7 +1326,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                         <KpiCard
                           key={key}
                           kpi={kpi}
-                          formatValue={(v) => (typeof v === "number" ? (isPct ? `${v.toFixed(2)}%` : Math.round(v).toLocaleString()) : v)}
+                          formatValue={(v) => (typeof v === "number" ? (isPct ? `${(v * 100).toFixed(2)}%` : Math.round(v).toLocaleString()) : v)}
                           showSparkline
                         />
                       );
@@ -1571,10 +1572,15 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                   <section key={sectionName} ref={unitExplorerRef} className="scroll-mt-6">
                     <details
                       open={unitExplorerExpanded}
-                      onToggle={(e) => setUnitExplorerExpanded(e.currentTarget.open)}
                       className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
                     >
-                      <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
+                      <summary 
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setUnitExplorerExpanded(prev => !prev);
+                        }}
+                        className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none"
+                      >
                         <div className="flex flex-col">
                           <span className="text-base font-bold">Unit Explorer</span>
                           <span className="text-xs text-muted-foreground font-normal">Detailed investigation of unit performance</span>
@@ -1670,10 +1676,15 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                   <section key={sectionName} ref={buyerExplorerRef} className="scroll-mt-6">
                     <details
                       open={buyerExplorerExpanded}
-                      onToggle={(e) => setBuyerExplorerExpanded(e.currentTarget.open)}
                       className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
                     >
-                      <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
+                      <summary 
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setBuyerExplorerExpanded(prev => !prev);
+                        }}
+                        className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none"
+                      >
                         <div className="flex flex-col">
                           <span className="text-base font-bold">Buyer Explorer</span>
                           <span className="text-xs text-muted-foreground font-normal">Detailed investigation of buyer performance</span>
@@ -1728,8 +1739,17 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
             case "diagnostics":
               if (isWF) {
                 return (
-                  <details key={sectionName} className="group rounded-lg border border-border bg-card shadow-sm open:pb-4">
-                    <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
+                  <details 
+                    open={diagnosticsExpanded}
+                    className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
+                  >
+                    <summary 
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setDiagnosticsExpanded(prev => !prev);
+                      }}
+                      className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none"
+                    >
                       Diagnostics
                       <span className="ml-4 transition-transform duration-200 group-open:rotate-180 text-muted-foreground">
                         ▼
@@ -1768,13 +1788,22 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                 );
               }
               return (
-                <details key={sectionName} className="group rounded-lg border border-border bg-card shadow-sm open:pb-4">
-                  <summary className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none">
-                    Diagnostics Section
-                    <span className="ml-4 transition-transform duration-200 group-open:rotate-180 text-muted-foreground">
-                      ▼
-                    </span>
-                  </summary>
+                 <details 
+                   open={diagnosticsExpanded}
+                   className="group rounded-lg border border-border bg-card shadow-sm open:pb-4"
+                 >
+                   <summary 
+                     onClick={(e) => {
+                       e.preventDefault();
+                       setDiagnosticsExpanded(prev => !prev);
+                     }}
+                     className="flex cursor-pointer items-center justify-between p-4 font-semibold text-foreground select-none"
+                   >
+                     Diagnostics Section
+                     <span className="ml-4 transition-transform duration-200 group-open:rotate-180 text-muted-foreground">
+                       ▼
+                     </span>
+                   </summary>
                   <div className="px-4 space-y-8 pt-2 border-t border-border mt-2">
                     {selectedReportType?.code.toLowerCase() === "pd_summary" ? (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1797,7 +1826,7 @@ export function DynamicDashboard({ user }: { user?: AuthUser }) {
                             <MultiSeriesTrend
                               data={trendToMultiSeries(diagnosticsPdPercentTrendQuery.data)}
                               title=""
-                              formatValue={(v) => v.toFixed(2) + "%"}
+                              formatValue={(v) => (v * 100).toFixed(2) + "%"}
                             />
                           )}
                         </div>

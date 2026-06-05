@@ -48,7 +48,7 @@ function DimensionExplorerInner({
 }: DimensionExplorerProps) {
   const isPct = metricLabel.toLowerCase().includes("percent") || metricLabel.toLowerCase().includes("pct") || metricLabel.includes("%");
   const defaultFormat = (v: number) => {
-    return isPct ? `${v.toFixed(2)}%` : Math.round(v).toLocaleString();
+    return isPct ? `${(v * 100).toFixed(2)}%` : Math.round(v).toLocaleString();
   };
   const format = formatValue ?? defaultFormat;
   const containerRef = useRef<HTMLDivElement>(null);
