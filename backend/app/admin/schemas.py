@@ -1,11 +1,16 @@
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from app.auth.constants import Permission, UserRole
+from app.buyer.schemas import BuyerEntry
 
-GLOBAL_ADMIN_PERMISSIONS = {Permission.REPORTS_READ, Permission.USERS_MANAGE}
+GLOBAL_ADMIN_PERMISSIONS = {
+    Permission.REPORTS_READ,
+    Permission.USERS_MANAGE,
+    Permission.BUYERS_ACCESS,
+}
 
 
 class AdminUser(BaseModel):
@@ -16,6 +21,7 @@ class AdminUser(BaseModel):
     is_active: bool
     is_provisioned: bool
     permissions: list[Permission]
+    assigned_buyers: list[BuyerEntry] = []
     created_at: str
     updated_at: str
 
@@ -42,6 +48,7 @@ class AdminUserCreateRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=120)
     role: UserRole
     permissions: list[Permission] = Field(default_factory=list, max_length=10)
+    assigned_buyers: list[str] = Field(default_factory=list)
 
     @field_validator("email")
     @classmethod
@@ -56,8 +63,20 @@ class AdminUserCreateRequest(BaseModel):
     def normalize_permissions(cls, value: list[Permission]) -> list[Permission]:
         permissions = set(value)
         if not permissions <= GLOBAL_ADMIN_PERMISSIONS:
-            raise ValueError("Only reports:read and users:manage can be assigned globally.")
+            raise ValueError(
+                "Only reports:read, users:manage, and buyers:access can be assigned globally."
+            )
         return sorted(permissions, key=lambda permission: permission.value)
+
+    @field_validator("assigned_buyers")
+    @classmethod
+    def validate_buyer_assignment(cls, value: list[str], info: ValidationInfo) -> list[str]:
+        permissions = info.data.get("permissions", [])
+        if Permission.BUYERS_ACCESS in permissions and not value:
+            raise ValueError(
+                "At least one buyer must be assigned when buyers:access is granted."
+            )
+        return value
 
 
 class AdminUserUpdateRequest(BaseModel):
@@ -65,14 +84,27 @@ class AdminUserUpdateRequest(BaseModel):
     role: UserRole
     is_active: bool
     permissions: list[Permission] = Field(default_factory=list, max_length=10)
+    assigned_buyers: list[str] = Field(default_factory=list)
 
     @field_validator("permissions")
     @classmethod
     def normalize_permissions(cls, value: list[Permission]) -> list[Permission]:
         permissions = set(value)
         if not permissions <= GLOBAL_ADMIN_PERMISSIONS:
-            raise ValueError("Only reports:read and users:manage can be assigned globally.")
+            raise ValueError(
+                "Only reports:read, users:manage, and buyers:access can be assigned globally."
+            )
         return sorted(permissions, key=lambda permission: permission.value)
+
+    @field_validator("assigned_buyers")
+    @classmethod
+    def validate_buyer_assignment(cls, value: list[str], info: ValidationInfo) -> list[str]:
+        permissions = info.data.get("permissions", [])
+        if Permission.BUYERS_ACCESS in permissions and not value:
+            raise ValueError(
+                "At least one buyer must be assigned when buyers:access is granted."
+            )
+        return value
 
 
 class AdminPasswordResetRequest(BaseModel):

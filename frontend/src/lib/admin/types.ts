@@ -8,6 +8,7 @@ export type AdminUser = {
   is_active: boolean;
   is_provisioned: boolean;
   permissions: string[];
+  assigned_buyers: { name: string }[];
   created_at: string;
   updated_at: string;
 };
@@ -34,6 +35,7 @@ export type AdminUserCreatePayload = {
   full_name: string;
   role: AuthRole;
   permissions: string[];
+  assigned_buyers: string[];
 };
 
 export type AdminUserUpdatePayload = {
@@ -41,6 +43,7 @@ export type AdminUserUpdatePayload = {
   role: AuthRole;
   is_active: boolean;
   permissions: string[];
+  assigned_buyers: string[];
 };
 
 export type AdminUserFilters = {

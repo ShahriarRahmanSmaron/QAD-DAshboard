@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase import AsyncClient
 
@@ -28,6 +29,8 @@ from app.admin.service import (
 from app.auth.constants import UserRole
 from app.auth.dependencies import require_role
 from app.auth.schemas import AuthUser
+from app.buyer.schemas import BuyerAssignmentListResponse
+from app.buyer.service import get_user_assigned_buyers, replace_user_buyers
 from app.core.supabase import get_required_supabase_admin_client
 from app.db.session import get_db_session
 
@@ -35,6 +38,10 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 AdminSupabaseDep = Annotated[AsyncClient, Depends(get_required_supabase_admin_client)]
 AdminUserDep = Annotated[AuthUser, Depends(require_role([UserRole.ADMIN]))]
+
+
+class AdminBuyerAssignRequest(BaseModel):
+    buyer_names: list[str] = Field(default_factory=list)
 
 
 async def find_supabase_user_by_email(
@@ -69,6 +76,7 @@ def _serialize_unprovisioned_auth_user(auth_user: SupabaseAdminUser) -> AdminUse
         is_active=False,
         is_provisioned=False,
         permissions=[],
+        assigned_buyers=[],
         created_at=str(getattr(auth_user, "created_at", "")),
         updated_at=str(getattr(auth_user, "updated_at", "")),
     )
@@ -191,6 +199,7 @@ async def create_user(
         role=payload.role,
         is_active=True,
         permissions=payload.permissions,
+        assigned_buyers=payload.assigned_buyers,
         actor=admin,
     )
     await create_audit_log(
@@ -244,6 +253,7 @@ async def update_user(
         role=payload.role,
         is_active=payload.is_active,
         permissions=payload.permissions,
+        assigned_buyers=payload.assigned_buyers,
         actor=admin,
     )
     await create_audit_log(
@@ -261,6 +271,57 @@ async def update_user(
     )
     await session.commit()
     return user
+
+
+@router.get("/users/{user_id}/buyers", response_model=BuyerAssignmentListResponse)
+async def get_user_buyers(
+    user_id: UUID,
+    session: SessionDep,
+    _admin: AdminUserDep,
+) -> BuyerAssignmentListResponse:
+    existing = await get_admin_user(session, user_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    buyers = await get_user_assigned_buyers(session, user_id)
+    return BuyerAssignmentListResponse(buyers=buyers)
+
+
+@router.put("/users/{user_id}/buyers", response_model=BuyerAssignmentListResponse)
+async def update_user_buyers(
+    user_id: UUID,
+    payload: AdminBuyerAssignRequest,
+    session: SessionDep,
+    admin: AdminUserDep,
+) -> BuyerAssignmentListResponse:
+    existing = await get_admin_user(session, user_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    try:
+        await replace_user_buyers(
+            session,
+            user_id=user_id,
+            buyer_names=payload.buyer_names,
+            granted_by=admin.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    await create_audit_log(
+        session,
+        actor=admin,
+        action="user.buyers_updated",
+        target_id=user_id,
+        metadata=json.dumps({"buyer_names": payload.buyer_names}),
+    )
+    await session.commit()
+
+    buyers = await get_user_assigned_buyers(session, user_id)
+    return BuyerAssignmentListResponse(buyers=buyers)
 
 
 @router.post("/users/{user_id}/reset-password", response_model=AdminStatusResponse)

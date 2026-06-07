@@ -20,6 +20,7 @@ import {
   createAdminUser,
   getAdminRoles,
   getAdminUsers,
+  getAvailableBuyers,
   resetAdminUserPassword,
   setAdminUserDisabled,
   updateAdminUser,
@@ -41,6 +42,7 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 const PERMISSION_OPTIONS = [
   { label: "Reports read", value: "reports:read" },
   { label: "Users manage", value: "users:manage" },
+  { label: "Buyers access", value: "buyers:access" },
 ];
 
 type UserFormState = {
@@ -49,6 +51,7 @@ type UserFormState = {
   role: AuthRole;
   is_active: boolean;
   permission: string;
+  assigned_buyers: string[];
 };
 
 function getInitialFormState(user?: AdminUser): UserFormState {
@@ -58,6 +61,7 @@ function getInitialFormState(user?: AdminUser): UserFormState {
     role: user?.role ?? "viewer",
     is_active: user?.is_active ?? true,
     permission: user?.permissions[0] ?? "",
+    assigned_buyers: user?.assigned_buyers?.map((b) => b.name) ?? [],
   };
 }
 
@@ -111,6 +115,52 @@ function inputClassName() {
   return "h-10 w-full rounded-md border bg-background/70 px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring";
 }
 
+function BuyerCheckboxes({
+  availableBuyers,
+  isCreate,
+  onChange,
+  selected,
+}: {
+  availableBuyers: { id: string; name: string }[];
+  isCreate: boolean;
+  onChange: (buyers: string[]) => void;
+  selected: string[];
+}) {
+  const toggle = (name: string) => {
+    if (selected.includes(name)) {
+      onChange(selected.filter((b) => b !== name));
+    } else {
+      onChange([...selected, name]);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-3">
+        {availableBuyers.map((buyer) => (
+          <label
+            key={buyer.name}
+            className="flex cursor-pointer items-center gap-2 rounded-md border bg-background/70 px-3 py-2 text-sm hover:bg-accent transition"
+          >
+            <input
+              checked={selected.includes(buyer.name)}
+              className="size-4 accent-primary"
+              onChange={() => toggle(buyer.name)}
+              type="checkbox"
+            />
+            {buyer.name}
+          </label>
+        ))}
+      </div>
+      {availableBuyers.length === 0 && !isCreate ? (
+        <p className="text-sm text-muted-foreground">
+          No buyers available. Upload workbooks to populate the buyer list.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function UserForm({
   error,
   isCreate,
@@ -128,6 +178,12 @@ function UserForm({
 }) {
   const [form, setForm] = useState<UserFormState>(() => getInitialFormState(user));
   const [validationError, setValidationError] = useState<string | null>(null);
+
+  const buyersQuery = useQuery({
+    queryKey: ["available-buyers"],
+    queryFn: getAvailableBuyers,
+  });
+  const availableBuyers = buyersQuery.data?.buyers ?? [];
 
   function updateField<TField extends keyof UserFormState>(
     field: TField,
@@ -150,10 +206,16 @@ function UserForm({
       return;
     }
 
+    if (form.permission === "buyers:access" && form.assigned_buyers.length === 0) {
+      setValidationError("At least one buyer must be assigned when buyers:access is granted.");
+      return;
+    }
+
     const commonPayload = {
       full_name: form.full_name.trim(),
       role: form.role,
       permissions: form.permission ? [form.permission] : [],
+      assigned_buyers: form.assigned_buyers,
     };
 
     if (isCreate) {
@@ -169,6 +231,8 @@ function UserForm({
       is_active: form.is_active,
     });
   }
+
+  const showBuyerCheckboxes = form.permission === "buyers:access";
 
   return (
     <form className="mt-5 space-y-5" onSubmit={handleSubmit}>
@@ -231,6 +295,21 @@ function UserForm({
           </Field>
         ) : null}
       </div>
+      {showBuyerCheckboxes ? (
+        <div className="space-y-2">
+          <span className="text-sm font-medium">Assigned buyers</span>
+          {buyersQuery.isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading buyers...</p>
+          ) : (
+            <BuyerCheckboxes
+              availableBuyers={availableBuyers}
+              isCreate={isCreate}
+              onChange={(buyers) => updateField("assigned_buyers", buyers)}
+              selected={form.assigned_buyers}
+            />
+          )}
+        </div>
+      ) : null}
       {validationError || error ? (
         <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {validationError ?? error}
@@ -465,6 +544,15 @@ export function AdminUserManagement() {
         headerName: "Permission",
         minWidth: 180,
         valueFormatter: (params) => (params.value as string[] | undefined)?.join(", ") || "None",
+      },
+      {
+        field: "assigned_buyers",
+        headerName: "Assigned Buyers",
+        minWidth: 180,
+        valueFormatter: (params) => {
+          const buyers = params.value as { name: string }[] | undefined;
+          return buyers?.map((b) => b.name).join(", ") || "—";
+        },
       },
       {
         field: "created_at",

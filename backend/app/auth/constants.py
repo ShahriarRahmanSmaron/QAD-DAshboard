@@ -14,3 +14,4 @@ class Permission(StrEnum):
     REPORTS_READ = "reports:read"
     REPORTS_EDIT = "reports:edit"
     USERS_MANAGE = "users:manage"
+    BUYERS_ACCESS = "buyers:access"

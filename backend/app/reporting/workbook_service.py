@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.schemas import AuthUser
 from app.core.config import settings
 from app.reporting import repository
+from app.reporting.buyer_sync_service import sync_buyers_from_facts
 from app.reporting.models import AuditLog, UploadedFile, UploadedFileStatus
 from app.reporting.schemas import (
     WorkbookDuplicateInfo,
@@ -240,6 +241,9 @@ async def save_and_parse_workbook_upload(
     )
     workbook_metadata = uploaded_file.metadata_
 
+    # MD11-1.1: sync buyer registry from newly extracted operational facts.
+    sync_result = await sync_buyers_from_facts(session, uploaded_file_id=uploaded_file.id)
+
     session.add(
         AuditLog(
             actor_id=actor.id,
@@ -257,6 +261,11 @@ async def save_and_parse_workbook_upload(
                 "workbook_sync": workbook_metadata.get("workbook_sync", {}),
                 "semantic_fact_count": len(semantic_extraction.facts),
                 "semantic_region_count": len(semantic_extraction.regions),
+                "buyer_sync": {
+                    "inserted": sync_result.inserted,
+                    "already_exists": sync_result.already_exists,
+                    "total_scanned": sync_result.total_scanned,
+                },
             },
         )
     )

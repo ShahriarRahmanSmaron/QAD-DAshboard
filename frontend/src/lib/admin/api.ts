@@ -91,3 +91,7 @@ export function setAdminUserDisabled(userId: string, disabled: boolean) {
     },
   );
 }
+
+export function getAvailableBuyers() {
+  return request<{ buyers: { id: string; name: string }[] }>("/api/buyers");
+}

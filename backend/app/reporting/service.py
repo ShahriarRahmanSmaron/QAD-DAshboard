@@ -13,6 +13,7 @@ from app.auth.constants import UserRole
 from app.auth.schemas import AuthUser
 from app.core.config import settings
 from app.reporting import repository
+from app.reporting.buyer_sync_service import sync_buyers_from_facts
 from app.reporting.models import (
     AuditLog,
     OperationalFact,
@@ -1041,6 +1042,12 @@ async def rebuild_operational_facts(
                 active += 1
             else:
                 inactive += 1
+
+        # MD11-1.1: sync buyer registry from rebuilt operational facts.
+        try:
+            await sync_buyers_from_facts(session, uploaded_file_id=uploaded_file.id)
+        except Exception:
+            pass  # buyer sync is best-effort; never block the rebuild
 
         rebuilt += 1
         results.append(

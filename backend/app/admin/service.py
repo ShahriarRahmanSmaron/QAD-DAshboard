@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.admin.schemas import AdminRoleOption, AdminUser
 from app.auth.constants import Permission, UserRole
 from app.auth.schemas import AuthUser
+from app.buyer.schemas import BuyerEntry
+from app.buyer.service import replace_user_buyers
 
 USER_LIST_QUERY = text(
     """
@@ -19,10 +21,12 @@ USER_LIST_QUERY = text(
         u.is_active,
         u.created_at,
         u.updated_at,
-        coalesce(array_remove(array_agg(distinct up.permission), null), '{}') as permissions
+        coalesce(array_remove(array_agg(distinct up.permission), null), '{}') as permissions,
+        coalesce(array_remove(array_agg(distinct ub.buyer_name) filter (where ub.buyer_name is not null), null), '{}') as buyer_names
       from public.users u
       join public.roles r on r.id = u.role_id
       left join public.user_permissions up on up.user_id = u.id
+      left join public.user_buyers ub on ub.user_id = u.id
       where (:search = '' or u.email ilike :search_pattern or u.full_name ilike :search_pattern)
         and (:role = '' or r.name = :role)
         and (
@@ -50,10 +54,12 @@ USER_PROFILE_LIST_QUERY = text(
       u.is_active,
       u.created_at,
       u.updated_at,
-      coalesce(array_remove(array_agg(distinct up.permission), null), '{}') as permissions
+      coalesce(array_remove(array_agg(distinct up.permission), null), '{}') as permissions,
+      coalesce(array_remove(array_agg(distinct ub.buyer_name) filter (where ub.buyer_name is not null), null), '{}') as buyer_names
     from public.users u
     join public.roles r on r.id = u.role_id
     left join public.user_permissions up on up.user_id = u.id
+    left join public.user_buyers ub on ub.user_id = u.id
     group by u.id, u.email, u.full_name, r.name, u.is_active, u.created_at, u.updated_at
     """
 )
@@ -76,10 +82,12 @@ USER_BY_ID_QUERY = text(
       u.is_active,
       u.created_at,
       u.updated_at,
-      coalesce(array_remove(array_agg(distinct up.permission), null), '{}') as permissions
+      coalesce(array_remove(array_agg(distinct up.permission), null), '{}') as permissions,
+      coalesce(array_remove(array_agg(distinct ub.buyer_name) filter (where ub.buyer_name is not null), null), '{}') as buyer_names
     from public.users u
     join public.roles r on r.id = u.role_id
     left join public.user_permissions up on up.user_id = u.id
+    left join public.user_buyers ub on ub.user_id = u.id
     where u.id = cast(:user_id as uuid)
     group by u.id, u.email, u.full_name, r.name, u.is_active, u.created_at, u.updated_at
     """
@@ -151,6 +159,7 @@ INSERT_AUDIT_LOG_QUERY = text(
 
 def _serialize_user(row: RowMapping) -> AdminUser:
     permissions_value = row["permissions"] or []
+    buyer_names_value = row["buyer_names"] or []
     return AdminUser(
         id=UUID(str(row["id"])),
         email=str(row["email"]),
@@ -159,6 +168,7 @@ def _serialize_user(row: RowMapping) -> AdminUser:
         is_active=bool(row["is_active"]),
         is_provisioned=True,
         permissions=[Permission(str(permission)) for permission in permissions_value],
+        assigned_buyers=[BuyerEntry(name=str(name)) for name in buyer_names_value],
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -227,6 +237,7 @@ async def upsert_admin_user(
     role: UserRole,
     is_active: bool,
     permissions: list[Permission],
+    assigned_buyers: list[str],
     actor: AuthUser,
 ) -> AdminUser:
     await session.execute(
@@ -240,6 +251,26 @@ async def upsert_admin_user(
         },
     )
     await replace_user_permissions(session, user_id=user_id, permissions=permissions)
+
+    if Permission.BUYERS_ACCESS in permissions:
+        if not assigned_buyers:
+            raise ValueError(
+                "At least one buyer assignment is required when buyers:access is granted."
+            )
+        await replace_user_buyers(
+            session,
+            user_id=user_id,
+            buyer_names=assigned_buyers,
+            granted_by=actor.id,
+        )
+    else:
+        await replace_user_buyers(
+            session,
+            user_id=user_id,
+            buyer_names=[],
+            granted_by=actor.id,
+        )
+
     user = await get_admin_user(session, user_id)
     if user is None:
         raise RuntimeError("User was not created.")

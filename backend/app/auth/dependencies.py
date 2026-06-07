@@ -9,8 +9,10 @@ from supabase import AsyncClient
 from app.auth.constants import ACCESS_TOKEN_COOKIE, Permission, UserRole
 from app.auth.schemas import AuthUser
 from app.auth.service import get_user_profile, has_explicit_permission
+from app.buyer.service import get_user_assigned_buyers
 from app.core.supabase import get_required_supabase_client
 from app.db.session import get_db_session
+from app.reporting.repository import list_active_buyers
 
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 SupabaseDep = Annotated[AsyncClient, Depends(get_required_supabase_client)]
@@ -120,7 +122,7 @@ def require_permission(
             if resource_id_param and resource_id_param in request.path_params
             else None
         )
-        if user.role == UserRole.EDITOR and await has_explicit_permission(
+        if await has_explicit_permission(
             session,
             user_id=user.id,
             permission=permission,
@@ -135,3 +137,23 @@ def require_permission(
         )
 
     return dependency
+
+
+async def get_user_buyer_filter(
+    user: CurrentUserDep,
+    session: SessionDep,
+) -> list[str]:
+    """Returns the list of buyers the current user is allowed to access.
+
+    Admins get all buyers. Users with buyers:access get their assignments.
+    Others get an empty list (no access).
+    """
+    if user.role == UserRole.ADMIN:
+        buyers = await list_active_buyers(session)
+        return [buyer.name for buyer in buyers]
+
+    if Permission.BUYERS_ACCESS.value in user.permissions:
+        assigned = await get_user_assigned_buyers(session, user.id)
+        return [entry.name for entry in assigned]
+
+    return []
