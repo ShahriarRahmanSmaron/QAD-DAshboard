@@ -1,4 +1,5 @@
 from uuid import UUID
+import logging
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.constants import Permission, UserRole
 from app.auth.models import UserPermission
 from app.auth.schemas import AuthUser
+
+logger = logging.getLogger(__name__)
 
 USER_PROFILE_QUERY = text(
     """
@@ -41,12 +44,25 @@ async def get_user_profile(
 
     permissions_value = row["permissions"] or []
     permissions = [str(permission) for permission in permissions_value]
+    role = UserRole(str(row["role"]))
+
+    logger.warning(
+        "AUTH_DIAG role=%s permissions=%s",
+        role,
+        permissions,
+    )
+
+    # Mirror require_permission decorator's role-based grants (dependencies.py:111-115)
+    # VIEWER and EDITOR roles always have reports:read access
+    if role in {UserRole.EDITOR, UserRole.VIEWER}:
+        if Permission.REPORTS_READ.value not in permissions:
+            permissions.append(Permission.REPORTS_READ.value)
 
     return AuthUser(
         id=UUID(str(row["id"])),
         email=str(row["email"]),
         full_name=str(row["full_name"]) if row["full_name"] else None,
-        role=UserRole(str(row["role"])),
+        role=role,
         permissions=permissions,
     )
 
