@@ -9,19 +9,17 @@ import { useOperationalDimensions } from "@/lib/reports/operational-hooks";
 import { FileSpreadsheet, RefreshCw } from "lucide-react";
 import type { AuthUser } from "@/lib/auth/types";
 
-type BuyerDashboardPageProps = {
-  user: AuthUser;
-};
-
 type BootstrapResponse = {
   default_report_type_id: string | null;
   latest_date: string | null;
+  report_type_name: string | null;
+  default_analysis_metric: string | null;
+  primary_metrics: string[];
   available_reports: { id: string; name: string; supports_buyer_analysis: boolean }[];
   available_buyers: { name: string }[];
 };
 
 export function BuyerDashboardPage({ user }: { user: AuthUser }) {
-  // 1. Fetch bootstrap data
   const bootstrapQuery = useQuery({
     queryKey: ["buyer-dashboard", "bootstrap"],
     queryFn: async (): Promise<BootstrapResponse> => {
@@ -34,7 +32,6 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
     staleTime: 60_000,
   });
 
-  // 2. Filter states
   const [selectedBuyer, setSelectedBuyer] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [compareMode, setCompareMode] = useState<"snapshot" | "compare">("snapshot");
@@ -44,14 +41,12 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
   const bootstrapData = bootstrapQuery.data;
   const reportTypeId = bootstrapData?.default_report_type_id || "";
 
-  // 3. Query available dates for this report type
   const dimensionsQuery = useOperationalDimensions(reportTypeId || undefined);
   const availableDates = useMemo(() => {
     const raw = dimensionsQuery.data?.dates ?? [];
     return raw.map((d) => d.value).sort((a, b) => a.localeCompare(b));
   }, [dimensionsQuery.data]);
 
-  // 4. Initialize states on load
   useEffect(() => {
     if (bootstrapData) {
       if (bootstrapData.available_buyers.length > 0 && !selectedBuyer) {
@@ -63,16 +58,13 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
     }
   }, [bootstrapData, selectedBuyer, selectedDate]);
 
-  // Adjust comparison date if it matches current date
   useEffect(() => {
     if (selectedDate && selectedCompareDate === selectedDate) {
-      // Find a different date from available dates
       const otherDate = availableDates.find((d) => d !== selectedDate) || null;
       setSelectedCompareDate(otherDate);
     }
   }, [selectedDate, selectedCompareDate, availableDates]);
 
-  // Default comparison date to the previous date in the list
   useEffect(() => {
     if (compareMode === "compare" && selectedDate && !selectedCompareDate && availableDates.length > 1) {
       const idx = availableDates.indexOf(selectedDate);
@@ -84,7 +76,6 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
     }
   }, [compareMode, selectedDate, selectedCompareDate, availableDates]);
 
-  // 5. Date lookback window for time-series charts (30 days ending at selectedDate)
   const dateWindow = useMemo(() => {
     if (!selectedDate) return { date_from: undefined, date_to: undefined };
     const d = new Date(selectedDate);
@@ -103,6 +94,9 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
       label: b.name,
     }));
   }, [bootstrapData]);
+
+  const analysisMetric = bootstrapData?.default_analysis_metric || "wait_for_test";
+  const analysisMetricLabel = analysisMetric.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
   if (bootstrapQuery.isLoading || dimensionsQuery.isLoading) {
     return (
@@ -126,13 +120,15 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
     );
   }
 
+  const reportLabel = bootstrapData?.report_type_name || "WF Test & Shade";
+
   if (!bootstrapData || !bootstrapData.default_report_type_id) {
     return (
       <div className="rounded-xl border border-dashed border-border/80 bg-accent/5 p-12 text-center text-muted-foreground">
         <FileSpreadsheet className="size-10 mx-auto text-muted-foreground/60 mb-3" />
         <h3 className="text-sm font-semibold text-foreground">No active workbooks found</h3>
         <p className="text-xs text-muted-foreground/80 mt-1 max-w-sm mx-auto">
-          Please upload and process at least one active "WF Test & Shade" workbook in the Workbook Manager.
+          Please upload and process at least one active "{reportLabel}" workbook in the Workbook Manager.
         </p>
       </div>
     );
@@ -140,7 +136,6 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
         <h1 className="text-2xl font-extrabold text-foreground tracking-tight">Buyer Dashboard</h1>
         <p className="text-sm text-muted-foreground">
@@ -148,7 +143,6 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
         </p>
       </div>
 
-      {/* Global Filters */}
       <BuyerDashboardFilters
         availableBuyers={formattedAvailableBuyers}
         selectedBuyer={selectedBuyer}
@@ -162,7 +156,6 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
         onCompareDateChange={setSelectedCompareDate}
       />
 
-      {/* QAD Analysis Section */}
       {selectedBuyer && selectedDate && (
         <QadAnalysisCards
           reportTypeId={reportTypeId}
@@ -174,15 +167,14 @@ export function BuyerDashboardPage({ user }: { user: AuthUser }) {
         />
       )}
 
-      {/* Buyer Analysis Section (Visible only when date comparison contains data) */}
       {hasData && selectedBuyer && selectedDate && (
         <div className="pt-2 animate-fadeIn">
           <BuyerAnalysisContainer
             selectedBuyer={selectedBuyer}
             onBuyerChange={setSelectedBuyer}
             availableBuyers={formattedAvailableBuyers}
-            metric="wait_for_test"
-            metricLabel="Wait For Test"
+            metric={analysisMetric}
+            metricLabel={analysisMetricLabel}
             reportTypeId={reportTypeId}
             dateWindow={dateWindow}
             latestDate={selectedDate}

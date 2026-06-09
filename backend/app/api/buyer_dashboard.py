@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Annotated, TypedDict
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +15,7 @@ from app.auth.dependencies import (
 )
 from app.auth.schemas import AuthUser
 from app.reporting.models import OperationalFact, ReportType, UploadedFile
+from app.reporting.parser_registry import METRICS_REGISTRY, get_manifest
 from app.reporting.repository import get_fact_visibility_filter
 
 router = APIRouter(prefix="/buyer-dashboard", tags=["buyer-dashboard"])
@@ -47,6 +48,9 @@ class BuyerOption(BaseModel):
 class BuyerDashboardBootstrapResponse(BaseModel):
     default_report_type_id: UUID | None
     latest_date: str | None
+    report_type_name: str | None
+    default_analysis_metric: str | None
+    primary_metrics: list[str]
     available_reports: list[BuyerReportTypeOption]
     available_buyers: list[BuyerOption]
 
@@ -58,9 +62,15 @@ class QadCard(BaseModel):
     previous_value: float | None = None
     delta: float | None = None
     pct_change: float | None = None
+    unit: str | None = None
+    display_format: str = "number"
+    display_order: int = 99
 
 
 class QadAnalysisResponse(BaseModel):
+    report_type: str
+    report_date: str
+    buyer: str
     cards: list[QadCard]
 
 
@@ -81,6 +91,9 @@ async def get_buyer_dashboard_bootstrap(
         return BuyerDashboardBootstrapResponse(
             default_report_type_id=None,
             latest_date=None,
+            report_type_name=None,
+            default_analysis_metric=None,
+            primary_metrics=[],
             available_reports=[],
             available_buyers=[]
         )
@@ -116,29 +129,39 @@ async def get_buyer_dashboard_bootstrap(
     buyer_names = await get_user_buyer_filter(user, session)
     available_buyers = [BuyerOption(name=name) for name in buyer_names]
 
+    # 5. Look up manifest for primary_metrics and default_analysis_metric
+    manifest = get_manifest(rt.code) if rt.code else None
+    dashboard_cfg = manifest.get("dashboard") if manifest else None
+    primary_metrics = dashboard_cfg.get("primary_metrics", []) if dashboard_cfg else []
+    default_analysis_metric = dashboard_cfg.get("default_analysis_metric") if dashboard_cfg else None
+
     return BuyerDashboardBootstrapResponse(
         default_report_type_id=rt.id,
         latest_date=latest_date_str,
+        report_type_name=rt.name,
+        default_analysis_metric=default_analysis_metric,
+        primary_metrics=primary_metrics,
         available_reports=available_reports,
         available_buyers=available_buyers
     )
 
 
-def _get_metric_agg_func(key: str):
-    if "pct" in key.lower() or "percent" in key.lower():
+def _get_metric_agg_func(metric_key: str):
+    meta = METRICS_REGISTRY.get(metric_key)
+    if meta and meta.get("aggregation") in ("avg", "formula"):
         return func.avg(OperationalFact.value_numeric)
     return func.sum(OperationalFact.value_numeric)
 
 
-async def _query_buyer_metric_value(
+async def _query_single_metric_value(
     session: AsyncSession,
     user: AuthUser,
     report_type_id: UUID,
     buyer: str,
     target_date: date,
-    metric_keys: list[str],
+    metric_key: str,
 ) -> float | None:
-    agg_func = _get_metric_agg_func(metric_keys[0])
+    agg_func = _get_metric_agg_func(metric_key)
     stmt = (
         select(agg_func)
         .select_from(OperationalFact)
@@ -147,8 +170,7 @@ async def _query_buyer_metric_value(
             UploadedFile.report_type_id == report_type_id,
             func.lower(OperationalFact.buyer) == buyer.strip().lower(),
             OperationalFact.report_date == target_date,
-            OperationalFact.metric_key.in_(metric_keys),
-            OperationalFact.row_classification == "detail",
+            OperationalFact.metric_key == metric_key,
             OperationalFact.deleted_at.is_(None),
             OperationalFact.is_active.is_(True),
             UploadedFile.deleted_at.is_(None),
@@ -179,7 +201,7 @@ async def get_buyer_qad_analysis(
             detail="You do not have permission to access data for this buyer."
         )
 
-    # 2. Check if any facts exist for this buyer on the target date
+    # 2. Check if any facts exist for this buyer on the target date (no row_classification filter)
     check_stmt = (
         select(func.count(OperationalFact.id))
         .select_from(OperationalFact)
@@ -188,7 +210,6 @@ async def get_buyer_qad_analysis(
             UploadedFile.report_type_id == report_type_id,
             func.lower(OperationalFact.buyer) == buyer.strip().lower(),
             OperationalFact.report_date == date,
-            OperationalFact.row_classification == "detail",
             OperationalFact.deleted_at.is_(None),
             OperationalFact.is_active.is_(True),
             UploadedFile.deleted_at.is_(None),
@@ -201,19 +222,27 @@ async def get_buyer_qad_analysis(
     if count_val == 0:
         return None
 
-    # DIAGNOSTIC: Log all distinct metric_keys for this report_type
-    import logging
-    _qad_log = logging.getLogger(__name__)
-    keys_stmt = (
+    # 3. Resolve report type name for response context
+    rt_stmt = select(ReportType.name).where(
+        ReportType.id == report_type_id,
+        ReportType.deleted_at.is_(None),
+    )
+    rt_name = (await session.execute(rt_stmt)).scalar_one_or_none() or "Unknown"
+
+    # 4. Discover distinct metrics for this report_type on this date for this buyer
+    discovery_stmt = (
         select(
-            func.distinct(OperationalFact.metric_key),
-            func.count(OperationalFact.id).label("cnt"),
+            OperationalFact.metric_key,
+            OperationalFact.metric_label,
+            OperationalFact.unit_of_measure,
         )
+        .distinct()
         .select_from(OperationalFact)
         .join(UploadedFile, UploadedFile.id == OperationalFact.uploaded_file_id)
         .where(
             UploadedFile.report_type_id == report_type_id,
-            OperationalFact.row_classification == "detail",
+            func.lower(OperationalFact.buyer) == buyer.strip().lower(),
+            OperationalFact.report_date == date,
             OperationalFact.deleted_at.is_(None),
             OperationalFact.is_active.is_(True),
             UploadedFile.deleted_at.is_(None),
@@ -221,40 +250,33 @@ async def get_buyer_qad_analysis(
             UploadedFile.archived_at.is_(None),
             get_fact_visibility_filter(user),
         )
-        .group_by(OperationalFact.metric_key)
-        .order_by(func.count(OperationalFact.id).desc())
     )
-    keys_result = await session.execute(keys_stmt)
-    actual_keys = [(row[0], row[1]) for row in keys_result.all()]
-    _qad_log.warning("QAD_DIAG: Actual metric_keys in DB for report_type=%s: %s", report_type_id, actual_keys)
+    discovered = (await session.execute(discovery_stmt)).all()
 
-    class MetricDefinition(TypedDict):
-        key: str
-        label: str
-        db_keys: list[str]
+    if not discovered:
+        return None
 
-    # 3. Define metrics to query (with synonyms for robustness)
-    metric_definitions: list[MetricDefinition] = [
-        {"key": "wait_for_test", "label": "Wait For Test", "db_keys": ["wait_for_test"]},
-        {"key": "pass_pct", "label": "Pass %", "db_keys": ["pass_pct", "pass", "pass_percent"]},
-        {"key": "fail_pct", "label": "Fail %", "db_keys": ["fail_pct", "fail", "fail_percent"]},
-        {
-            "key": "need_approval_pct",
-            "label": "Need Approval %",
-            "db_keys": ["need_approval_pct", "need_approval", "need_approval_percent"],
-        },
-        {
-            "key": "no_app_pct",
-            "label": "No App %",
-            "db_keys": ["no_app_pct", "no_app", "no_app_percent"],
-        },
-        {"key": "total_weight", "label": "Total Weight", "db_keys": ["total_weight", "total_wgt"]},
-    ]
+    # 5. Build metric info list with registry lookup
+    metric_infos = []
+    for row in discovered:
+        mk = row[0]  # metric_key
+        ml = row[1] or mk.replace("_", " ").title()  # metric_label (fallback to derived)
+        uom = row[2]  # unit_of_measure
 
+        meta = METRICS_REGISTRY.get(mk)
+        display_format = meta.get("display_format", "number") if meta else "number"
+        display_order = meta.get("display_order", 999) if meta else 999
+
+        metric_infos.append((mk, ml, uom, display_format, display_order))
+
+    # 6. Sort by (display_order, metric_label)
+    metric_infos.sort(key=lambda x: (x[4], x[1]))
+
+    # 7. Aggregate value for each metric
     cards = []
-    for defn in metric_definitions:
-        val = await _query_buyer_metric_value(
-            session, user, report_type_id, buyer, date, defn["db_keys"]
+    for mk, ml, uom, display_format, display_order in metric_infos:
+        val = await _query_single_metric_value(
+            session, user, report_type_id, buyer, date, mk
         )
 
         prev_val = None
@@ -262,8 +284,8 @@ async def get_buyer_qad_analysis(
         pct_change = None
 
         if compare_date:
-            prev_val = await _query_buyer_metric_value(
-                session, user, report_type_id, buyer, compare_date, defn["db_keys"]
+            prev_val = await _query_single_metric_value(
+                session, user, report_type_id, buyer, compare_date, mk
             )
             if val is not None and prev_val is not None:
                 delta = val - prev_val
@@ -274,13 +296,21 @@ async def get_buyer_qad_analysis(
 
         cards.append(
             QadCard(
-                key=defn["key"],
-                label=defn["label"],
+                key=mk,
+                label=ml,
                 value=val,
                 previous_value=prev_val,
                 delta=delta,
-                pct_change=pct_change
+                pct_change=pct_change,
+                unit=uom,
+                display_format=display_format,
+                display_order=display_order,
             )
         )
 
-    return QadAnalysisResponse(cards=cards)
+    return QadAnalysisResponse(
+        report_type=rt_name,
+        report_date=date.isoformat(),
+        buyer=buyer,
+        cards=cards,
+    )

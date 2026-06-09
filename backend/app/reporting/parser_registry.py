@@ -34,6 +34,7 @@ class MetricMetadata(TypedDict):
     metric_key: str
     aggregation: Literal["sum", "avg", "formula"]
     display_format: Literal["number", "percentage"]
+    display_order: int
     historical_comparison: bool
 
 
@@ -42,36 +43,42 @@ METRICS_REGISTRY: dict[str, MetricMetadata] = {
         "metric_key": "pd_percent",
         "aggregation": "formula",
         "display_format": "percentage",
+        "display_order": 2,
         "historical_comparison": True
     },
     "pd_qty": {
         "metric_key": "pd_qty",
         "aggregation": "sum",
         "display_format": "number",
+        "display_order": 1,
         "historical_comparison": True
     },
     "t_stock": {
         "metric_key": "t_stock",
         "aggregation": "sum",
         "display_format": "number",
+        "display_order": 1,
         "historical_comparison": True
     },
     "wait_for_test": {
         "metric_key": "wait_for_test",
         "aggregation": "sum",
         "display_format": "number",
+        "display_order": 2,
         "historical_comparison": True
     },
     "wait_for_shade": {
         "metric_key": "wait_for_shade",
         "aggregation": "sum",
         "display_format": "number",
+        "display_order": 3,
         "historical_comparison": True
     },
     "wait_for_rfd": {
         "metric_key": "wait_for_rfd",
         "aggregation": "sum",
         "display_format": "number",
+        "display_order": 4,
         "historical_comparison": True
     },
 }
@@ -79,6 +86,7 @@ METRICS_REGISTRY: dict[str, MetricMetadata] = {
 
 class DashboardManifest(TypedDict):
     primary_metrics: list[str]
+    default_analysis_metric: str | None
     dimensions: list[str]
     default_group_by: str
     enable_historical: bool
@@ -133,6 +141,7 @@ WF_TEST_AND_SHADE: ParserManifest = {
     "hidden_dimensions": [],
     "dashboard": {
         "primary_metrics": ["t_stock", "wait_for_test", "wait_for_shade", "wait_for_rfd"],
+        "default_analysis_metric": "wait_for_test",
         "dimensions": ["unit", "buyer"],
         "default_group_by": "unit",
         "enable_historical": True,
@@ -162,6 +171,7 @@ PD_SUMMARY: ParserManifest = {
     "hidden_dimensions": [],
     "dashboard": {
         "primary_metrics": ["pd_qty", "pd_percent"],
+        "default_analysis_metric": "pd_qty",
         "dimensions": ["unit", "sub_unit", "department"],
         "default_group_by": "sub_unit",
         "enable_historical": True,
