@@ -199,18 +199,7 @@ function BuyerExplorerInner({
           <p className="text-sm text-muted-foreground">Detailed investigation of buyer performance</p>
         </div>
         <div className="flex items-center gap-3">
-          <label className="text-sm font-medium text-foreground">Select Buyer:</label>
-          <select
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm"
-            value={activeBuyer}
-            onChange={(e) => onBuyerChange(e.target.value)}
-          >
-            {availableBuyers.map((b) => (
-              <option key={b.value} value={b.value}>
-                {b.label}
-              </option>
-            ))}
-          </select>
+          <span className="text-sm text-muted-foreground">Buyer: <span className="font-semibold text-foreground">{activeBuyer}</span></span>
           <ChartExportButtons containerRef={containerRef} filename={`${activeBuyer}_Explorer`} />
         </div>
       </div>
@@ -370,6 +359,21 @@ function BuyerExplorerInner({
                     formatValue={format}
                     onUnitClick={onUnitClick}
                   />
+                )}
+                {unitContribQuery.data && !previousDate && (
+                  <SnapshotUnitBreakdown
+                    unitTrend={unitContribQuery.data}
+                    currentDate={latestDate}
+                    formatValue={format}
+                    onUnitClick={onUnitClick}
+                  />
+                )}
+                {!unitContribQuery.data && !unitContribQuery.isLoading && (
+                  <div className="py-8 text-center">
+                    <p className="text-sm text-muted-foreground italic">
+                      No unit contribution data available for {activeBuyer}
+                    </p>
+                  </div>
                 )}
               </div>
             </div>
@@ -657,6 +661,79 @@ function UnitComparisonSection({
                 </tr>
               ))
             )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
+type SnapshotUnitBreakdownProps = {
+  unitTrend: OperationalTrendResponse;
+  currentDate: string;
+  formatValue: (v: number) => string;
+  onUnitClick?: (unit: string) => void;
+};
+
+function SnapshotUnitBreakdown({
+  unitTrend,
+  currentDate,
+  formatValue,
+  onUnitClick,
+}: SnapshotUnitBreakdownProps) {
+  const units = useMemo(() => {
+    const unitMap = new Map<string, number>();
+    for (const point of unitTrend.points) {
+      if (point.report_date === currentDate) {
+        if (point.series == null) continue;
+        const u = point.series;
+        unitMap.set(u, (unitMap.get(u) ?? 0) + Number(point.numeric_total));
+      }
+    }
+    return Array.from(unitMap.entries())
+      .map(([unit, value]) => ({ unit, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [unitTrend, currentDate]);
+
+  if (units.length === 0) {
+    return (
+      <div className="py-8 text-center">
+        <p className="text-sm text-muted-foreground italic">No unit breakdown data for {formatShortDate(currentDate)}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          Snapshot mode &mdash; showing unit breakdown for {formatShortDate(currentDate)}.
+          Switch to Compare mode for period-over-period comparison.
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border text-left uppercase text-muted-foreground font-semibold">
+              <th className="px-2 py-2">Unit</th>
+              <th className="px-2 py-2 text-right">{formatShortDate(currentDate)}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {units.map(({ unit, value }) => (
+              <tr key={unit} className="border-b border-border/50 last:border-0 hover:bg-muted/30">
+                <td
+                  className="px-2 py-2.5 font-medium cursor-pointer hover:text-primary hover:underline text-foreground"
+                  onClick={() => onUnitClick?.(unit)}
+                >
+                  {unit}
+                </td>
+                <td className="px-2 py-2.5 text-right tabular-nums font-semibold text-foreground">
+                  {formatValue(value)}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

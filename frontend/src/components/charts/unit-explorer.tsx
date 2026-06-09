@@ -371,6 +371,7 @@ function TopContributingBuyerCard({ data, latestDate, formatValue }: TopContribu
       if (point.report_date === latestDate) {
         const v = Number(point.numeric_total);
         total += v;
+        if (point.series == null) continue;
         const b = point.series || "Unknown";
         buyerMap.set(b, (buyerMap.get(b) || 0) + v);
       }

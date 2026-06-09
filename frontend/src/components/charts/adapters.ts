@@ -331,6 +331,7 @@ export function trendToGroupedSeriesByDate(
 
   for (const point of trend.points) {
     if (!allowDates.has(point.report_date)) continue;
+    if (point.series == null) continue;
     const category = point.series ?? trend.metric_key;
     const value = toNumber(point.numeric_total);
 
@@ -379,6 +380,7 @@ export function trendToMultiSeries(
   const seriesTotals = new Map<string, number>();
   for (const point of trend.points) {
     if (!allowDates.has(point.report_date)) continue;
+    if (point.series == null) continue;
     const key = point.series ?? trend.metric_key;
     seriesTotals.set(key, (seriesTotals.get(key) ?? 0) + toNumber(point.numeric_total));
   }
@@ -403,6 +405,7 @@ export function trendToMultiSeries(
 
   for (const point of trend.points) {
     if (!allowDates.has(point.report_date)) continue;
+    if (point.series == null) continue;
     const key = point.series ?? trend.metric_key;
     if (!allowedSeries.has(key)) continue;
     const entry = dateMap.get(point.report_date);
@@ -437,6 +440,7 @@ export function trendToHeatmap(
 
   for (const point of trend.points) {
     if (!allowDates.has(point.report_date)) continue;
+    if (point.series == null) continue;
     const row = point.series ?? trend.metric_key;
     const value = toNumber(point.numeric_total);
     if (!matrix[row]) {
@@ -484,6 +488,7 @@ export function trendToDateComparison(
   const previousMap = new Map<string, number>();
 
   for (const point of trend.points) {
+    if (point.series == null) continue;
     const group = point.series ?? trend.metric_key;
     const value = toNumber(point.numeric_total);
     if (point.report_date === currentDate) {

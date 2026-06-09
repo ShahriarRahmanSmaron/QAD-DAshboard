@@ -1017,6 +1017,8 @@ async def get_operational_trend(
         "section": OperationalFact.operational_section,
     }
     series_col = _SERIES_DIMENSIONS.get(series_by) if series_by else None
+    if series_col is not None:
+        clauses.append(series_col.is_not(None))
 
     select_columns = [
         OperationalFact.report_date.label("report_date"),
