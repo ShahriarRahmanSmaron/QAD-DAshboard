@@ -7,7 +7,6 @@ import {
   BarChart3,
   ClipboardCheck,
   Database,
-  FlaskConical,
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
@@ -15,13 +14,21 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSidebarStore } from "@/hooks/use-sidebar-store";
-import type { AuthRole } from "@/lib/auth/types";
+import type { AuthRole, AuthUser } from "@/lib/auth/types";
 import { cn } from "@/lib/utils";
 
-const navigation = [
+type NavigationItem = {
+  href: string;
+  label: string;
+  icon: ComponentType<{ size?: number }>;
+  roles?: AuthRole[];
+  check?: (user: AuthUser) => boolean;
+};
+
+const navigation: NavigationItem[] = [
   {
     label: "Workspace",
-    href: "/",
+    href: "/dashboard",
     icon: LayoutDashboard,
     roles: ["admin", "editor", "viewer"],
   },
@@ -29,7 +36,7 @@ const navigation = [
     label: "Workbook Manager",
     href: "/reports/grid",
     icon: ClipboardCheck,
-    roles: ["admin", "editor", "viewer"],
+    roles: ["admin", "editor"],
   },
   {
     label: "Operational Query",
@@ -44,28 +51,36 @@ const navigation = [
     roles: ["admin", "editor", "viewer"],
   },
   {
+    label: "Buyer Dashboard",
+    href: "/buyer-dashboard",
+    icon: BarChart3,
+    check: (user: AuthUser) => user.role === "admin" || (user.role === "viewer" && user.permissions.includes("buyers:access")),
+  },
+  {
     label: "Administration",
     href: "/admin/users",
     icon: Settings,
     roles: ["admin"],
   },
-] satisfies Array<{
-  href: string;
-  label: string;
-  icon: ComponentType<{ size?: number }>;
-  roles: AuthRole[];
-}>;
+];
 
 type SidebarProps = {
-  role: AuthRole;
+  user: AuthUser;
 };
 
-export function Sidebar({ role }: SidebarProps) {
+export function Sidebar({ user }: SidebarProps) {
   const pathname = usePathname();
   const { isOpen, toggle } = useSidebarStore();
-  const visibleNavigation = navigation.filter((item) =>
-    item.roles.includes(role),
-  );
+  
+  const visibleNavigation = navigation.filter((item) => {
+    if (item.check) {
+      return item.check(user);
+    }
+    if (item.roles) {
+      return item.roles.includes(user.role);
+    }
+    return false;
+  });
 
   return (
     <>

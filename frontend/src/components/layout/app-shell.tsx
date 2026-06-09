@@ -14,7 +14,7 @@ type AppShellProps = {
 export function AppShell({ children, user }: AppShellProps) {
   return (
     <div className="min-h-screen">
-      <Sidebar role={user.role} />
+      <Sidebar user={user} />
       <div className="lg:pl-72">
         <Topbar user={user} />
         <motion.main

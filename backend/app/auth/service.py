@@ -1,9 +1,10 @@
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.constants import Permission, UserRole
+from app.auth.models import UserPermission
 from app.auth.schemas import AuthUser
 
 USER_PROFILE_QUERY = text(
@@ -20,18 +21,6 @@ USER_PROFILE_QUERY = text(
     where u.id = cast(:user_id as uuid)
       and u.is_active = true
     group by u.id, u.email, u.full_name, r.name
-    """
-)
-
-USER_PERMISSION_QUERY = text(
-    """
-    select 1
-    from public.user_permissions
-    where user_id = cast(:user_id as uuid)
-      and permission = :permission
-      and (:resource_type is null or resource_type = :resource_type)
-      and (:resource_id is null or resource_id = cast(:resource_id as uuid))
-    limit 1
     """
 )
 
@@ -70,13 +59,18 @@ async def has_explicit_permission(
     resource_type: str | None = None,
     resource_id: str | None = None,
 ) -> bool:
-    result = await session.execute(
-        USER_PERMISSION_QUERY,
-        {
-            "user_id": str(user_id),
-            "permission": permission.value,
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-        },
+    stmt = select(UserPermission.id).where(
+        UserPermission.user_id == user_id,
+        UserPermission.permission == permission.value,
     )
+
+    if resource_type is not None:
+        stmt = stmt.where(UserPermission.resource_type == resource_type)
+
+    if resource_id is not None:
+        stmt = stmt.where(UserPermission.resource_id == UUID(resource_id))
+
+    stmt = stmt.limit(1)
+
+    result = await session.execute(stmt)
     return result.scalar_one_or_none() is not None

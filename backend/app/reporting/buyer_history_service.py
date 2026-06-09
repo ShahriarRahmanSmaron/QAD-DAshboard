@@ -6,7 +6,7 @@ from sqlalchemy import select, func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.schemas import AuthUser
 from app.reporting.models import OperationalFact, UploadedFile
-from app.reporting.repository import _uploaded_file_access_filter, _with_default_grain, OperationalFactFilters, _operational_fact_filters
+from app.reporting.repository import _with_default_grain, OperationalFactFilters, _operational_fact_filters
 
 async def get_active_report_dates(
     session: AsyncSession,
@@ -24,7 +24,6 @@ async def get_active_report_dates(
             UploadedFile.deleted_at.is_(None),
             UploadedFile.is_active_workbook.is_(True),
             UploadedFile.archived_at.is_(None),
-            _uploaded_file_access_filter(user),
             OperationalFact.report_date.is_not(None)
         )
     )

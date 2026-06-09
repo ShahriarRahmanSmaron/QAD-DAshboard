@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Select, delete, func, or_, select, true, case
+from sqlalchemy import Select, column, delete, func, or_, select, table, true, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.interfaces import ExecutableOption
@@ -40,6 +40,23 @@ def _uploaded_file_access_filter(user: AuthUser) -> ColumnElement[bool]:
     if user.role == UserRole.ADMIN or Permission.REPORTS_READ.value in user.permissions:
         return true()
     return UploadedFile.uploaded_by_user_id == user.id
+
+
+def get_fact_visibility_filter(user: AuthUser) -> ColumnElement[bool]:
+    if user.role == UserRole.ADMIN or user.role == UserRole.EDITOR:
+        return true()
+    if Permission.BUYERS_ACCESS.value in user.permissions:
+        user_buyers_tbl = table(
+            "user_buyers",
+            column("user_id"),
+            column("buyer_name"),
+        )
+        buyer_subquery = (
+            select(func.lower(user_buyers_tbl.c.buyer_name))
+            .where(user_buyers_tbl.c.user_id == user.id)
+        )
+        return func.lower(OperationalFact.buyer).in_(buyer_subquery)
+    return true()
 
 
 async def active_buyer_exists(session: AsyncSession, buyer_id: UUID) -> bool:
@@ -633,7 +650,6 @@ def _operational_fact_filters(
     clauses: list[ColumnElement[bool]] = [
         OperationalFact.deleted_at.is_(None),
         UploadedFile.deleted_at.is_(None),
-        _uploaded_file_access_filter(user),
     ]
     # MD07-2B: queries operate on active facts only unless explicitly told to
     # include the soft-cleaned (legacy composite / ambiguous) ones.
@@ -719,7 +735,6 @@ async def resolve_latest_date_if_needed(
                 UploadedFile.deleted_at.is_(None),
                 UploadedFile.is_active_workbook.is_(True),
                 UploadedFile.archived_at.is_(None),
-                _uploaded_file_access_filter(user),
             )
         )
         latest_date = (await session.execute(latest_date_stmt)).scalar_one_or_none()
@@ -1125,7 +1140,6 @@ async def get_operational_comparison(
                     UploadedFile.deleted_at.is_(None),
                     UploadedFile.is_active_workbook.is_(True),
                     UploadedFile.archived_at.is_(None),
-                    _uploaded_file_access_filter(user),
                 )
             )
             current_date = (await session.execute(max_date_stmt)).scalar_one_or_none()
@@ -1275,7 +1289,6 @@ async def get_accessible_operational_fact(
             OperationalFact.id == fact_id,
             OperationalFact.deleted_at.is_(None),
             UploadedFile.deleted_at.is_(None),
-            _uploaded_file_access_filter(user),
         )
         .options(selectinload(OperationalFact.uploaded_file))
     )
@@ -1339,7 +1352,6 @@ async def list_operational_dimensions(
         UploadedFile.deleted_at.is_(None),
         UploadedFile.is_active_workbook.is_(True),
         UploadedFile.archived_at.is_(None),
-        _uploaded_file_access_filter(user),
     ]
     if report_type_id is not None:
         base_filters.append(UploadedFile.report_type_id == report_type_id)

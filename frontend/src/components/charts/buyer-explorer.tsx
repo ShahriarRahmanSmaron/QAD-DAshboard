@@ -18,6 +18,7 @@ import type { OperationalTrendResponse } from "@/lib/reports/types";
 import type { DateComparisonRow } from "./types";
 
 type BuyerExplorerProps = {
+  title?: string;
   selectedBuyer: string | null;
   onBuyerChange: (buyer: string) => void;
   onUnitClick?: (unit: string) => void;
@@ -32,6 +33,7 @@ type BuyerExplorerProps = {
 };
 
 function BuyerExplorerInner({
+  title,
   selectedBuyer,
   onBuyerChange,
   onUnitClick,
@@ -69,7 +71,7 @@ function BuyerExplorerInner({
         date_to: dateWindow.date_to,
         limit: 365,
       }),
-    enabled: Boolean(activeBuyer && metric),
+    enabled: Boolean(activeBuyer && metric && reportTypeId),
     staleTime: 30_000,
   });
 
@@ -86,7 +88,7 @@ function BuyerExplorerInner({
         date_to: dateWindow.date_to,
         limit: 365,
       }),
-    enabled: Boolean(activeBuyer && metric),
+    enabled: Boolean(activeBuyer && metric && reportTypeId),
     staleTime: 30_000,
   });
 
@@ -192,7 +194,8 @@ function BuyerExplorerInner({
     <div className="space-y-6" ref={containerRef}>
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-4">
         <div>
-          <h2 className="text-xl font-bold text-foreground">Buyer Explorer</h2>
+          <h2 className="text-xl font-bold text-foreground">{title ?? "Buyer Explorer"}</h2>
+
           <p className="text-sm text-muted-foreground">Detailed investigation of buyer performance</p>
         </div>
         <div className="flex items-center gap-3">
